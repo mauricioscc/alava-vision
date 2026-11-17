@@ -7,6 +7,15 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.5.0] — 2026-11-17
+#### Alterado
+- O logo da Alava aparece **somente nas telas de clima e trânsito**. Sites, imagens, vídeos e mensagens passam a ser exibidos sem o logo. Isso também resolve o logo da Alava sobreposto ao logo do Acessórias.
+- O logo agora faz parte das próprias telas (`static/weather.html` e `/view/traffic`), em vez de ser injetado pelo player. A pré-visualização do painel mostra exatamente o que vai para a TV.
+- A tela de trânsito ganhou uma faixa escura no topo com o logo Alava, "Trânsito agora · cidade" e relógio. O mapa fica abaixo da faixa, porque o canto superior esquerdo do Waze e do Google Maps já tem a busca do próprio mapa e o logo ficaria por cima dela.
+
+#### Removido
+- Opções do player `--no-watermark`, `--wm-opacity` e `--logo`.
+
 ### [0.4.0] — 2026-11-17
 > Projeto agora versionado com Git. Ponto de restauração da 0.3.0: commit `acb3fda` na branch `main`.
 

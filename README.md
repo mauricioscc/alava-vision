@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.4.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.5.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -32,8 +32,12 @@ nem a posição das telas nas configurações do Windows.
 - A cada 10 s ele confere a janela. Se ela saiu da TV, volta para lá.
 - TV desligada ou desconectada: a janela é minimizada para não cobrir o monitor principal e volta sozinha quando a TV reaparece.
 
-Outras opções do player: `--port 8080`, `--channel msedge`, `--no-watermark`, `--wm-opacity 0.7`,
-`--logo assets/outro.png`, `--monitor 0 --screen-x X --screen-y Y` (posição manual).
+Outras opções do player: `--port 8080`, `--channel msedge`, `--monitor 0 --screen-x X --screen-y Y` (posição manual).
+
+### Logo da Alava
+
+O logo aparece no canto superior esquerdo apenas nas telas de **clima** e **trânsito**. Sites, imagens,
+vídeos e mensagens aparecem sem alteração. O arquivo usado é `assets/watermark.png`.
 
 ## O que o painel faz
 
@@ -57,12 +61,12 @@ Para conferir a decisão atual: `http://localhost:8080/api/player/state`.
 ```
 Alava Vision/
 ├── server.py              Backend FastAPI + SQLite (API, programação, clima, telas do player)
-├── player.py              Chrome em kiosk via CDP; segue /api/player/state; injeta a marca d'água
+├── player.py              Chrome em kiosk via CDP; segue /api/player/state
 ├── monitors.py            Detecta os monitores do Windows e mantém a janela do player na TV
 ├── iniciar_alava_vision.bat  Servidor + player com um clique
 ├── static/index.html      Painel administrativo
 ├── static/weather.html    Tela de clima (relógio, 7 dias, céu animado, alertas INMET)
-├── assets/                Logos da Alava; watermark.png é a versão usada na TV
+├── assets/                Logos da Alava; watermark.png é o logo das telas de clima e trânsito
 ├── data/                  Banco (database.db), uploads e perfil do navegador do player
 ├── .env                   Senha, porta, localização, código IBGE, monitor da TV (fora do Git)
 ├── .env.example           Modelo do .env
@@ -96,7 +100,6 @@ Ficam fora do Git: `.env` (senha), `data/` (banco, uploads e login do Chrome da 
 
 - **Prévia de sites**: alguns sites (ex.: sistemas com login) não permitem ser exibidos dentro de outra página.
   A prévia mostra um aviso nesses casos; na TV eles abrem normalmente.
-- **Marca d'água**: sites com política de segurança que bloqueia imagens `data:` não exibem o logo.
 - **Alertas do INMET**: o endereço usado (`apiprevmet3.inmet.gov.br/avisos/ativos`) não é documentado oficialmente.
   Se sair do ar, a tela de clima continua funcionando, só sem os alertas.
 - A programação é diária (igual todos os dias) e usa o relógio do computador do servidor.

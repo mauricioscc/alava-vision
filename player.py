@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.4.0
+Alava Vision — Player (player.py) · versão 0.5.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -10,8 +10,6 @@ COMO RODAR (com o servidor já rodando na porta 8080)
     python player.py --monitor 3              # TV em outro monitor
     python player.py --monitor 1              # testar com uma tela só (ocupa o monitor principal!)
     python player.py --monitor 0 --screen-x 1366 --screen-y -371   # posição manual (modo antigo)
-    python player.py --no-watermark           # desliga a marca d'água
-    python player.py --wm-opacity 0.7         # transparência da marca (0.65 a 0.85 recomendado)
     Monitor padrão também pode ser definido no .env: PLAYER_MONITOR=2
     Fechar: Ctrl+C no terminal (ou Alt+F4 com o foco na TV).
 
@@ -24,8 +22,12 @@ COMPORTAMENTO DO MONITOR
       o monitor principal. Quando a TV volta, o player a recoloca automaticamente.
     Detalhes em monitors.py.
 
+LOGO DA ALAVA
+    O player não insere nada nas páginas. O logo faz parte das telas de clima e trânsito
+    (static/weather.html e /view/traffic no server.py); os sites aparecem sem alteração.
+
 COMO REVERTER
-    Com Git:  git checkout main   (volta tudo para a versão 0.3.0)
+    Com Git:  git log --oneline  e  git checkout <commit> -- player.py
     Sem Git:  backup_v0.2.0_20261117/player.py (versão 0.2.0)
 
 MAPA DO CÓDIGO
@@ -35,12 +37,10 @@ MAPA DO CÓDIGO
     Consulta ao servidor ............ fetch_state()  → GET /api/player/state
     Janela de horário de mensagens .. time_in_window()
     URL de cada tipo de item ........ item_url()
-    Marca d'água Alava .............. watermark_script(), WATERMARK_JS
     Loop de exibição ................ run()
     Parâmetros de linha de comando .. main()
 """
 import argparse
-import base64
 import json
 import os
 import subprocess
@@ -53,7 +53,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -162,62 +162,6 @@ def item_url(item: dict, server: str) -> str:
     return f"{server}/view/{t}/{item['id']}"
 
 
-# ─── Marca d'água ─────────────────────────────────────────────────────────────
-#
-# Como funciona: o player injeta este script em TODA página que o Chrome abre
-# (sites externos e telas do Alava Vision) via `add_init_script`. Ele cria um
-# elemento com Shadow DOM — assim o CSS do site não deforma o logo — preso no
-# canto superior esquerdo, acima de tudo (z-index máximo) e sem capturar cliques.
-# Os estilos são aplicados por JavaScript (element.style), que continua
-# funcionando em sites com Content-Security-Policy que bloqueia <style> inline.
-# Limitação: sites com CSP que proíbe imagens `data:` não mostram o logo.
-#
-# Estilo (pedido: discreto, legível em fundo claro e escuro):
-#   • altura 4,2% da tela (≈45 px em 1080p), margens de 2,2% / 1,8%;
-#   • opacidade configurável (padrão 0.8);
-#   • duas sombras escuras: contorno fino + halo suave, para o logo branco
-#     continuar legível sobre páginas brancas.
-
-WATERMARK_JS = """
-(() => {
-  if (window.top !== window) return;
-  const SRC = __SRC__, OPACITY = __OPACITY__;
-  const mount = () => {
-    if (!document.documentElement || document.getElementById('alava-watermark')) return;
-    const host = document.createElement('div');
-    host.id = 'alava-watermark';
-    host.style.setProperty('all', 'initial');
-    const root = host.attachShadow({mode: 'closed'});
-    const img = document.createElement('img');
-    img.src = SRC;
-    img.alt = '';
-    Object.assign(img.style, {
-      position: 'fixed', top: 'max(2.2vh, 14px)', left: 'max(1.8vw, 16px)',
-      height: 'clamp(26px, 4.2vh, 72px)', width: 'auto', maxWidth: 'none',
-      margin: '0', padding: '0', border: '0', zIndex: '2147483647',
-      opacity: String(OPACITY), pointerEvents: 'none', userSelect: 'none',
-      filter: 'drop-shadow(0 1px 2px rgba(0,0,0,.55)) drop-shadow(0 0 10px rgba(0,0,0,.35))',
-    });
-    root.appendChild(img);
-    document.documentElement.appendChild(host);
-  };
-  mount();
-  document.addEventListener('DOMContentLoaded', mount);
-  setInterval(mount, 2000);
-})();
-"""
-
-
-def watermark_script(logo: Path, opacity: float) -> str | None:
-    if not logo.exists():
-        log("Logo da marca d'água não encontrado:", logo)
-        return None
-    mime = "image/svg+xml" if logo.suffix.lower() == ".svg" else "image/png"
-    src = f"data:{mime};base64,{base64.b64encode(logo.read_bytes()).decode()}"
-    return (WATERMARK_JS.replace("__SRC__", json.dumps(src))
-            .replace("__OPACITY__", str(max(0.0, min(1.0, opacity)))))
-
-
 # ─── Monitor da TV ────────────────────────────────────────────────────────────
 
 def browser_pid(browser, proc: subprocess.Popen | None) -> int | None:
@@ -273,7 +217,6 @@ def run(args):
     from playwright.sync_api import sync_playwright
 
     server = f"http://127.0.0.1:{args.port}"
-    wm_js = None if args.no_watermark else watermark_script((BASE / args.logo).resolve(), args.wm_opacity)
 
     proc = None
     with sync_playwright() as p:
@@ -283,8 +226,6 @@ def run(args):
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.on("dialog", lambda d: d.dismiss())
-            if wm_js:
-                page.add_init_script(wm_js)
 
             guard = MonitorGuard(args, browser_pid(browser, proc))
             guard.wait_window()
@@ -304,8 +245,6 @@ def run(args):
 
                 if not items:
                     page.set_content(IDLE_HTML)
-                    if wm_js:
-                        page.evaluate(wm_js)
                     current_url = None
                     idx = 0
                     for _ in range(5):
@@ -376,9 +315,6 @@ def main():
     ap.add_argument("--browser-path", default="")
     ap.add_argument("--cdp-port", type=int, default=9222)
     ap.add_argument("--profile", default="data/browser-profile")
-    ap.add_argument("--logo", default="assets/watermark.png", help="arquivo do logo da marca d'água")
-    ap.add_argument("--wm-opacity", type=float, default=0.8, help="opacidade da marca d'água (0 a 1)")
-    ap.add_argument("--no-watermark", action="store_true", help="não exibir marca d'água")
     args = ap.parse_args()
 
     if args.list_monitors:

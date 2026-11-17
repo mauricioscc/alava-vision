@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.4.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.5.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -331,7 +331,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('schedule')" id="nb-schedule"><span class="ic">◷</span> Programação</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.4.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.5.0</div>
 </aside>
 
 <div class="main">
@@ -976,7 +976,7 @@ function openPreview(item) {
       sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe></div>`;
     note.innerHTML = item.type === 'url'
       ? `Prévia em escala de uma tela 1920×1080. Se ficar em branco, o site não permite ser exibido dentro de outras páginas; na TV ele abre normalmente. <a href="${esc(src)}" target="_blank" rel="noopener">Abrir em nova aba</a>`
-      : 'Prévia em escala de uma tela 1920×1080, igual à TV (sem a marca d\'água, que o player adiciona).';
+      : 'Prévia em escala de uma tela 1920×1080, exatamente como aparece na TV.';
   }
   $('pv-overlay').hidden = false;
   requestAnimationFrame(fitFrame);

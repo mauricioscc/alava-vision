@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.4.0
+Alava Vision — Servidor (server.py) · versão 0.5.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -34,7 +34,11 @@ MAPA DO CÓDIGO
     Clima ........................... _fetch_forecast(), _build_weather(), _inmet_alerts(), GET /api/weather
     Telas exibidas pelo player ...... /view/image/{id}, /view/video/{id}, /view/weather,
                                       /view/traffic, /view/message/{id}
+    Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
+                                      Só clima e trânsito exibem o logo; sites, imagens, vídeos e
+                                      mensagens aparecem sem ele.
 """
+import html
 import json
 import os
 import secrets
@@ -54,7 +58,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 load_dotenv()
 
@@ -641,13 +645,37 @@ def view_weather():
 
 @app.get("/view/traffic")
 def view_traffic():
+    """Mapa de trânsito com uma faixa no topo: logo Alava à esquerda, título e relógio à direita.
+
+    O logo fica na faixa (e não por cima do mapa) porque o canto superior esquerdo do Waze
+    e do Google Maps já tem a busca/cartão do próprio mapa. A faixa mantém o logo no mesmo
+    lugar e tamanho da tela de clima (canto superior esquerdo, 4,2% da altura).
+    """
     s = load_settings()
     lat, lon, maps_key = s["weather_lat"], s["weather_lon"], s["maps_api_key"]
+    city = html.escape(s["weather_city"] or "")
     if maps_key:
         src = f"https://www.google.com/maps/embed/v1/view?key={maps_key}&center={lat},{lon}&zoom=13&maptype=roadmap"
     else:
         src = f"https://embed.waze.com/iframe?zoom=14&lat={lat}&lon={lon}&ct=livemap&pin=1"
-    return view_html(f'<iframe style="width:100%;height:100%;border:0" src="{src}" allowfullscreen></iframe>')
+    return view_html(f"""
+<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:#0b1220">
+  <header style="height:9vh;flex:none;display:flex;align-items:center;justify-content:space-between;
+    padding:0 1.8vw;color:#fff;font-variant-numeric:tabular-nums">
+    <img src="/assets/watermark.png" alt="Alava" style="height:clamp(26px,4.2vh,72px);width:auto;opacity:.9">
+    <div style="display:flex;align-items:baseline;gap:2vw">
+      <span style="font-size:2.2vh;font-weight:600;letter-spacing:.2em;text-transform:uppercase;opacity:.85">
+        Trânsito agora{' · ' + city if city else ''}</span>
+      <span id="clock" style="font-size:3.6vh;font-weight:300"></span>
+    </div>
+  </header>
+  <iframe style="flex:1;width:100%;border:0" src="{src}" allowfullscreen></iframe>
+</div>
+<script>
+function tick(){{const n=new Date();document.getElementById('clock').textContent=
+  String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');}}
+tick(); setInterval(tick, 1000);
+</script>""")
 
 
 @app.get("/view/message/{item_id}")
