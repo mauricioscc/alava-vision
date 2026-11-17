@@ -7,6 +7,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.6.0] — 2026-11-17
+#### Alterado
+- **A tela de clima abre pronta**, sem "--°" nem "Carregando previsão…". O servidor já envia a página com a previsão embutida (`/view/weather`), então ela é desenhada no mesmo instante, sem esperar rede.
+- O servidor atualiza a previsão e os alertas do INMET **em segundo plano a cada 9 minutos**, então quem abre a tela nunca espera a internet. Se a internet cair, continua mostrando a última previsão boa.
+- "Atualizado às" mostra a hora em que a previsão foi obtida, e não mais a hora em que a página abriu.
+- Fonte Inter salva no projeto (`static/fonts/inter-latin.woff2`, licença OFL). A tela de clima não depende mais do Google Fonts.
+
 ### [0.5.0] — 2026-11-17
 #### Alterado
 - O logo da Alava aparece **somente nas telas de clima e trânsito**. Sites, imagens, vídeos e mensagens passam a ser exibidos sem o logo. Isso também resolve o logo da Alava sobreposto ao logo do Acessórias.
