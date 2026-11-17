@@ -1,0 +1,611 @@
+<!doctype html>
+<!--
+  Alava Vision — Tela de clima (static/weather.html) · versão 0.3.0
+
+  COMO ABRIR / TESTAR (servidor rodando na porta 8080)
+    http://localhost:8080/view/weather                         previsão real
+    http://localhost:8080/view/weather?demo=storm&wind=45&alert=orange
+        demo  = clear | partly | overcast | fog | drizzle | rain | heavy | storm | hail | snow
+        wind  = vento em km/h (acelera nuvens, inclina a chuva, mostra rajadas acima de 20)
+        day   = 1 dia | 0 noite
+        alert = yellow | orange | red (tag de teste no canto inferior direito)
+
+  COMO REVERTER
+    Copie backup_v0.2.0_20261117/static/weather.html por cima deste arquivo.
+
+  MAPA DO CÓDIGO
+    Layout / CSS ................ .top (cidade, à direita), .main (.clock, .now), .bottom (.week, .alerts)
+    Bloco "Chance de chuva" ..... .v / .v small  (CSS) e array `stats` em render()
+    Relógio ..................... tick()
+    Códigos de tempo (WMO) ...... DESC, INTENSITY, kindOf(), desc()
+    Ícones SVG .................. icon(), sunI(), moonI(), cloudI()
+    Dados / modo demonstração ... load(), fakeData(), applyDemo()
+    Preenchimento da tela ....... render()
+    Céu animado (canvas) ........ Sky (PAL, TONES, CONF, build(), frame(), drawSun/Moon/Clouds/Rain/Snow/Fog/Lightning)
+    Marca d'água ................ não fica aqui: o player injeta em todas as telas (player.py → WATERMARK_JS).
+                                  O canto superior esquerdo fica livre para ela.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alava Vision · Clima</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#0b1530;color:#fff;
+  font-family:'Inter',system-ui,'Segoe UI',sans-serif;font-variant-numeric:tabular-nums}
+#sky{position:fixed;inset:0;width:100%;height:100%;display:block}
+.shade{position:fixed;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,rgba(0,0,0,.22) 0%,rgba(0,0,0,0) 28%,rgba(0,0,0,0) 52%,rgba(0,0,0,.5) 100%)}
+.ui{position:fixed;inset:0;display:grid;grid-template-rows:auto 1fr auto;gap:2.4vh;
+  padding:4vh 3.4vw;text-shadow:0 2px 14px rgba(0,0,0,.35)}
+
+/* Canto superior esquerdo reservado para a marca d'água: cidade fica à direita */
+.top{display:flex;flex-direction:column;align-items:flex-end;gap:.5vh;text-align:right}
+.city{font-size:2.5vh;font-weight:600;letter-spacing:.28em;text-transform:uppercase}
+.upd{font-size:1.7vh;opacity:.72}
+
+.main{display:flex;align-items:center;justify-content:space-between;gap:4vw;min-height:0}
+.clock{display:flex;align-items:flex-start;font-size:27vh;font-weight:200;line-height:.88;letter-spacing:-.03em}
+.clock .colon{animation:blink 2s steps(1) infinite;margin:0 .01em}
+.clock .sec{font-size:7.5vh;font-weight:300;opacity:.75;margin:2.6vh 0 0 1.2vw;letter-spacing:0}
+@keyframes blink{50%{opacity:.3}}
+.date{margin-top:2vh;font-size:3.8vh;font-weight:300}
+
+.glass{background:rgba(12,20,38,.3);border:1px solid rgba(255,255,255,.17);border-radius:2.2vh;
+  backdrop-filter:blur(16px) saturate(1.25);-webkit-backdrop-filter:blur(16px) saturate(1.25)}
+.now{display:flex;flex-direction:column;gap:2.6vh;padding:3.2vh 2.4vw;min-width:40vw}
+.now-head{display:flex;align-items:center;gap:1.8vw}
+.now-head svg{width:15vh;height:15vh;flex:none;filter:drop-shadow(0 .6vh 1.4vh rgba(0,0,0,.3))}
+.temp{font-size:13vh;font-weight:200;line-height:1}
+.cond{font-size:3.2vh;margin-top:.6vh}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:2vh 2vw;
+  border-top:1px solid rgba(255,255,255,.15);padding-top:2.4vh}
+.k{font-size:1.5vh;text-transform:uppercase;letter-spacing:.16em;opacity:.7}
+/* Valor principal numa linha; cada informação secundária em sua própria linha,
+   menor e com quebra permitida, para não ser cortada nem espremida no card. */
+.v{font-size:3vh;margin-top:.5vh;line-height:1.15}
+.v small{display:block;font-size:1.55vh;line-height:1.35;opacity:.75;margin-top:.35vh;white-space:normal}
+.v small + small{margin-top:.1vh}
+
+.bottom{display:flex;gap:1.4vw;align-items:stretch}
+.week{flex:1;min-width:0;display:grid;grid-template-columns:repeat(7,1fr);padding:2vh .8vw}
+.day{display:flex;flex-direction:column;align-items:center;gap:.7vh;padding:.6vh .4vw;border-radius:1.4vh}
+.day+.day{border-left:1px solid rgba(255,255,255,.12)}
+.day.today{background:rgba(255,255,255,.1);border-left-color:transparent}
+.day.today+.day{border-left-color:transparent}
+.dn{font-size:2.3vh;font-weight:600;text-transform:capitalize}
+.dd{font-size:1.5vh;opacity:.65}
+.day svg{width:7.5vh;height:7.5vh}
+.tt{font-size:2.7vh}
+.tt span{opacity:.6;font-size:2.2vh;margin-left:.4vw}
+.rp{display:flex;align-items:center;gap:.4vw;font-size:1.9vh}
+.rp svg{width:1.9vh;height:1.9vh}
+.bar{width:78%;height:.7vh;border-radius:1vh;background:rgba(255,255,255,.16);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:1vh;background:linear-gradient(90deg,#8fd0ff,#3b8eea)}
+.mm{font-size:1.5vh;opacity:.7;min-height:1.8vh}
+
+.alerts{width:25vw;display:flex;flex-direction:column;justify-content:flex-end;gap:1.2vh}
+.alerts:empty{display:none}
+.tag{--c:#FFC21A;--ct:#1d1600;display:flex;gap:1vw;align-items:flex-start;padding:1.6vh 1.2vw;
+  border-radius:1.6vh;border:2px solid var(--c);background:rgba(14,14,20,.62);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);text-shadow:none;animation:pulse 2.4s infinite}
+.tag.orange{--c:#FF7A1A;--ct:#1f0d00}
+.tag.red{--c:#EF2D2D;--ct:#fff}
+.tag .ic{flex:none;width:4.8vh;height:4.8vh;border-radius:50%;background:var(--c);color:var(--ct);
+  display:grid;place-items:center}
+.tag .ic svg{width:2.8vh;height:2.8vh}
+.tag .t{font-size:2.3vh;font-weight:700;line-height:1.2}
+.tag .s{display:inline-block;margin-top:.6vh;padding:.3vh .6vw;border-radius:.6vh;background:var(--c);color:var(--ct);
+  font-size:1.4vh;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.tag .w{font-size:1.6vh;opacity:.82;margin-top:.6vh}
+.more{font-size:1.6vh;opacity:.8;text-align:right}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--c) 65%,transparent)}
+  70%{box-shadow:0 0 0 1.8vh transparent}
+  100%{box-shadow:0 0 0 0 transparent}}
+</style>
+</head>
+<body>
+<canvas id="sky"></canvas>
+<div class="shade"></div>
+
+<div class="ui">
+  <div class="top">
+    <div class="city" id="city">&nbsp;</div>
+    <div class="upd" id="upd"></div>
+  </div>
+
+  <div class="main">
+    <div>
+      <div class="clock"><span id="hh">--</span><span class="colon">:</span><span id="mi">--</span><span class="sec" id="ss">--</span></div>
+      <div class="date" id="date"></div>
+    </div>
+    <div class="now glass">
+      <div class="now-head">
+        <div id="cur-icon"></div>
+        <div>
+          <div class="temp" id="temp">--°</div>
+          <div class="cond" id="cond">Carregando previsão…</div>
+        </div>
+      </div>
+      <div class="stats" id="stats"></div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="week glass" id="week"></div>
+    <div class="alerts" id="alerts"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+let W = null;
+
+// ─── Relógio ──────────────────────────────────────────────────────────────────
+function tick() {
+  const n = new Date(), p = x => String(x).padStart(2, '0');
+  $('hh').textContent = p(n.getHours());
+  $('mi').textContent = p(n.getMinutes());
+  $('ss').textContent = p(n.getSeconds());
+  const d = n.toLocaleDateString('pt-BR', {weekday: 'long', day: 'numeric', month: 'long'});
+  $('date').textContent = d.charAt(0).toUpperCase() + d.slice(1);
+}
+tick(); setInterval(tick, 1000);
+
+// ─── Condições (códigos WMO) ──────────────────────────────────────────────────
+const DESC = {0:'Céu limpo',1:'Predomínio de sol',2:'Parcialmente nublado',3:'Nublado',45:'Nevoeiro',48:'Nevoeiro',
+  51:'Garoa fraca',53:'Garoa',55:'Garoa intensa',56:'Garoa congelante',57:'Garoa congelante',61:'Chuva fraca',
+  63:'Chuva moderada',65:'Chuva forte',66:'Chuva congelante',67:'Chuva congelante',71:'Neve fraca',73:'Neve',
+  75:'Neve forte',77:'Grãos de neve',80:'Pancadas de chuva',81:'Pancadas fortes',82:'Pancadas violentas',
+  85:'Pancadas de neve',86:'Pancadas de neve',95:'Trovoadas',96:'Trovoadas com granizo',99:'Trovoadas com granizo'};
+const INTENSITY = {51:.15,53:.25,55:.35,56:.25,57:.35,61:.4,63:.65,65:.9,66:.5,67:.8,80:.5,81:.75,82:1,
+  95:.8,96:.95,99:1,71:.3,73:.55,75:.85,77:.3,85:.5,86:.8};
+const desc = (c, day) => (!day && c === 1) ? 'Poucas nuvens' : (!day && c === 0) ? 'Céu limpo' : (DESC[c] || '—');
+function kindOf(c) {
+  if (c === 0) return 'clear';
+  if (c <= 2) return 'partly';
+  if (c === 3) return 'overcast';
+  if (c === 45 || c === 48) return 'fog';
+  if (c >= 95) return 'storm';
+  if ((c >= 71 && c <= 77) || c === 85 || c === 86) return 'snow';
+  return 'rain';
+}
+
+// ─── Ícones SVG ───────────────────────────────────────────────────────────────
+function rays(cx, cy, r1, r2) {
+  let s = '';
+  for (let i = 0; i < 8; i++) {
+    const a = i * Math.PI / 4, c = Math.cos(a), n = Math.sin(a);
+    s += `<line x1="${cx + c * r1}" y1="${cy + n * r1}" x2="${cx + c * r2}" y2="${cy + n * r2}"/>`;
+  }
+  return `<g stroke="#FFC93C" stroke-width="2.6" stroke-linecap="round">${s}</g>`;
+}
+const sunI = (cx, cy, k) => `<circle cx="${cx}" cy="${cy}" r="${8 * k}" fill="#FFC93C"/>` + rays(cx, cy, 11.5 * k, 15.5 * k);
+const moonI = (cx, cy, k) => `<path transform="translate(${cx} ${cy}) scale(${k})" d="M3-11a11 11 0 1 0 9 15A9 9 0 0 1 3-11z" fill="#E9EEF8"/>`;
+const cloudI = (col, dx = 0, dy = 0, k = 1) =>
+  `<path transform="translate(${dx} ${dy}) scale(${k})" d="M15 38h20a8 8 0 0 0 1.5-15.9A11 11 0 0 0 15.5 20a9 9 0 0 0-.5 18z" fill="${col}"/>`;
+function icon(code, day) {
+  const k = kindOf(code), body = day ? sunI : moonI;
+  let s = '';
+  if (k === 'clear') s = body(24, 24, 1);
+  else if (k === 'partly') s = body(17, 17, .8) + cloudI('#F4F7FC', 4, 2, .92);
+  else if (k === 'overcast') s = cloudI('#B9C3D1', -6, -6, .8) + cloudI('#E6EBF2', 2, 2);
+  else if (k === 'fog') s = cloudI('#D5DBE4', 0, -8) + '<g stroke="#D5DBE4" stroke-width="2.6" stroke-linecap="round"><line x1="10" y1="37" x2="38" y2="37"/><line x1="14" y1="43" x2="34" y2="43"/></g>';
+  else if (k === 'rain') s = cloudI('#C9D2DE', 0, -7) + '<g stroke="#7CC4FF" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="35" x2="15" y2="43"/><line x1="26" y1="35" x2="23" y2="43"/><line x1="34" y1="35" x2="31" y2="43"/></g>';
+  else if (k === 'snow') s = cloudI('#D9E0EA', 0, -7) + '<g fill="#fff"><circle cx="17" cy="38" r="2"/><circle cx="25" cy="42" r="2"/><circle cx="33" cy="38" r="2"/></g>';
+  else s = cloudI('#8B96A6', 0, -7) + '<path d="M25 30l-6 9h5l-3 8 9-11h-5l3-6z" fill="#FFD23F"/>';
+  return `<svg viewBox="0 0 48 48" aria-hidden="true">${s}</svg>`;
+}
+const DROP = '<svg viewBox="0 0 24 24"><path d="M12 3s-6 7-6 11a6 6 0 0 0 12 0c0-4-6-11-6-11z" fill="#8fd0ff"/></svg>';
+const WARN = '<svg viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M12 10v5M12 18v.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
+
+// ─── Dados ────────────────────────────────────────────────────────────────────
+const DEMO_CODES = {clear:0, partly:2, overcast:3, fog:45, drizzle:53, rain:63, heavy:65, storm:95, hail:99, snow:73};
+
+function fakeData() {
+  const t = new Date(), iso = d => d.toISOString().slice(0, 10), daily = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(t); d.setDate(t.getDate() + i);
+    daily.push({date: iso(d), code: [0,2,3,63,95,80,1][i], max: 31 - i % 3, min: 21 + i % 2,
+      rain_prob: [0,10,35,80,95,60,5][i], rain_sum: [0,0,1,18,42,8,0][i], gust_max: 20 + i * 6});
+  }
+  return {city: 'Demonstração', sunrise: iso(t) + 'T05:20', sunset: iso(t) + 'T18:35', alerts: [],
+    current: {temp: 28, feels: 30, humidity: 65, wind: 10, gust: 18, code: 0, is_day: 1, rain_prob: 0, rain_prob_rest: 35}, daily};
+}
+
+function applyDemo() {
+  if (!params.has('demo')) return;
+  if (!W) W = fakeData();
+  const c = W.current, code = DEMO_CODES[params.get('demo')];
+  if (code !== undefined) c.code = code;
+  if (params.has('wind')) { c.wind = +params.get('wind'); c.gust = c.wind * 1.6; }
+  if (params.has('day')) c.is_day = params.get('day') === '1' ? 1 : 0;
+  const sev = params.get('alert');
+  if (sev) W.alerts = [{title: 'Tempestade (teste)', severity: sev, detail: 'Alerta de demonstração', end: null, source: 'Demo'}];
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/weather', {cache: 'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    W = await r.json();
+  } catch (e) {
+    if (!W && !params.has('demo')) {
+      $('cond').textContent = 'Previsão indisponível no momento';
+      const h = new Date().getHours();
+      Sky.setScene({kind: 'partly', intensity: 0, day: h >= 6 && h < 18, wind: 8}, null, null);
+    }
+  }
+  applyDemo();
+  if (W) render();
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+const r0 = x => Math.round(x ?? 0);
+const fmtEnd = s => {
+  const m = String(s || '').match(/(\d{4})-(\d{2})-(\d{2})[ T]?(\d{2})?:?(\d{2})?/);
+  if (!m) return s || '';
+  return `${m[3]}/${m[2]}` + (m[4] ? ` ${m[4]}:${m[5] || '00'}` : '');
+};
+const hm = s => (s || '').slice(11, 16);
+
+function render() {
+  const c = W.current, today = W.daily[0] || {}, day = !!c.is_day;
+  $('city').textContent = W.city || '';
+  $('upd').textContent = 'Atualizado às ' + new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'});
+  $('cur-icon').innerHTML = icon(c.code, day);
+  $('temp').textContent = r0(c.temp) + '°';
+  $('cond').textContent = desc(c.code, day);
+
+  // Chance de chuva (ver _build_weather no server.py):
+  //   rain_prob      = probabilidade NESTA HORA
+  //   rain_prob_rest = maior probabilidade daqui até 23:59 (ignora horas que já passaram)
+  // A 0.2.0 mostrava o máximo do dia inteiro, que incluía a madrugada.
+  const rainNow = c.rain_prob ?? today.rain_prob ?? 0;
+  const rainRest = c.rain_prob_rest ?? rainNow;
+  const stats = [
+    ['Sensação', `${r0(c.feels)}°`],
+    ['Máx / Mín', `${r0(today.max)}° / ${r0(today.min)}°`],
+    ['Umidade', `${r0(c.humidity)}%`],
+    ['Chance de chuva', `${r0(rainNow)}%<small>nesta hora</small><small>máx. ${r0(rainRest)}% até o fim do dia</small>`],
+    ['Vento', `${r0(c.wind)} km/h<small>rajadas de ${r0(c.gust)} km/h</small>`],
+    ['Nascer do sol', `${hm(W.sunrise)}<small>pôr do sol às ${hm(W.sunset)}</small>`],
+  ];
+  $('stats').innerHTML = stats.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+  $('week').innerHTML = W.daily.slice(0, 7).map((d, i) => {
+    const dt = new Date(d.date + 'T12:00');
+    const name = i === 0 ? 'Hoje' : i === 1 ? 'Amanhã' : dt.toLocaleDateString('pt-BR', {weekday: 'short'}).replace('.', '');
+    const prob = r0(d.rain_prob), sum = d.rain_sum || 0;
+    return `<div class="day${i === 0 ? ' today' : ''}">
+      <div class="dn">${name}</div>
+      <div class="dd">${dt.toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit'})}</div>
+      ${icon(d.code, true)}
+      <div class="tt">${r0(d.max)}°<span>${r0(d.min)}°</span></div>
+      <div class="rp">${DROP}${prob}%</div>
+      <div class="bar"><i style="width:${prob}%"></i></div>
+      <div class="mm">${sum >= .1 ? sum.toFixed(sum < 10 ? 1 : 0).replace('.', ',') + ' mm' : ''}</div>
+    </div>`;
+  }).join('');
+
+  const SEV = {yellow: 'Atenção', orange: 'Alerta', red: 'Perigo'};
+  const list = W.alerts || [], shown = list.slice(0, 3);
+  $('alerts').innerHTML = shown.map(a => `
+    <div class="tag ${a.severity}">
+      <div class="ic">${WARN}</div>
+      <div>
+        <div class="t">${a.title}</div>
+        <span class="s">${SEV[a.severity] || 'Aviso'} · ${a.source}</span>
+        <div class="w">${a.end ? 'Até ' + fmtEnd(a.end) : (a.detail || '')}</div>
+      </div>
+    </div>`).join('') + (list.length > 3 ? `<div class="more">+${list.length - 3} avisos ativos</div>` : '');
+
+  Sky.setScene({kind: kindOf(c.code), intensity: INTENSITY[c.code] || 0, day, wind: c.wind || 0, gust: c.gust || 0},
+    W.sunrise, W.sunset);
+}
+
+// ─── Céu animado ──────────────────────────────────────────────────────────────
+const Sky = (() => {
+  const cv = $('sky'), ctx = cv.getContext('2d'), R = Math.random;
+  let w = 0, h = 0, S = {kind: 'clear', intensity: 0, day: true, wind: 8, gust: 12}, key = '';
+  let sunrise = null, sunset = null;
+  let clouds = [], drops = [], flakes = [], stars = [], streaks = [], fogs = [];
+  let flash = 0, bolt = null, nextBolt = 0, reflash = 0;
+  const sprites = {};
+
+  const PAL = {
+    day: {clear: ['#1462d4', '#4f9fee', '#a6d3ff'], partly: ['#2a6cc6', '#679fdf', '#b4d3ef'],
+      overcast: ['#5b6676', '#8994a2', '#b3bbc5'], fog: ['#8c959e', '#afb6bd', '#d1d5d9'],
+      rain: ['#3b4552', '#5c6876', '#7f8a96'], storm: ['#14181f', '#283039', '#434d5c'], snow: ['#8b9aaf', '#b5c1d0', '#dae1e9']},
+    night: {clear: ['#020713', '#0a1835', '#1c325c'], partly: ['#040916', '#0f1b35', '#21304c'],
+      overcast: ['#0a0d13', '#161b24', '#252c37'], fog: ['#13171d', '#21262d', '#343a42'],
+      rain: ['#06080c', '#11151b', '#1f252d'], storm: ['#020305', '#0b0e13', '#191e26'], snow: ['#131925', '#222b3a', '#394455']},
+  };
+  const TONES = {
+    white: [[255, 255, 255], 'rgba(118,136,165,.5)'],
+    grey: [[204, 210, 218], 'rgba(72,80,95,.65)'],
+    dark: [[128, 136, 148], 'rgba(30,34,44,.75)'],
+    storm: [[86, 93, 106], 'rgba(10,12,18,.85)'],
+    night: [[88, 100, 124], 'rgba(8,10,20,.7)'],
+    nightDark: [[50, 56, 68], 'rgba(4,5,10,.8)'],
+  };
+  const CONF = {
+    clear: {n: 3, tone: 'white', a: .7, s: [.45, .8]},
+    partly: {n: 9, tone: 'white', a: .92, s: [.6, 1.2]},
+    overcast: {n: 20, tone: 'grey', a: .95, s: [1, 1.8]},
+    fog: {n: 8, tone: 'grey', a: .55, s: [1, 1.8]},
+    rain: {n: 22, tone: 'dark', a: .96, s: [1, 1.9]},
+    storm: {n: 26, tone: 'storm', a: 1, s: [1.1, 2.1]},
+    snow: {n: 16, tone: 'grey', a: .9, s: [.9, 1.6]},
+  };
+  const SUN_VIS = {clear: 1, partly: .85, overcast: .12, fog: .35, rain: 0, storm: 0, snow: .1};
+  const STAR_VIS = {clear: 1, partly: .6};
+
+  const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+  const mix = (a, b, t) => { const A = hex(a), B = hex(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t))})`; };
+
+  function makeCloud(tone) {
+    const [rgb, shade] = TONES[tone], cw = 520, ch = 260;
+    const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    const g = c.getContext('2d'), col = a => `rgba(${rgb},${a})`;
+    const puffs = 14 + Math.floor(R() * 10);
+    for (let i = 0; i < puffs; i++) {
+      const fx = .16 + R() * .68, arch = Math.sin(fx * Math.PI);
+      const px = cw * fx, py = ch * (.5 + (R() - .5) * .28 - arch * .14);
+      const r = ch * (.14 + R() * .18) * (.55 + arch * .65);
+      const gr = g.createRadialGradient(px, py - r * .3, r * .1, px, py, r);
+      gr.addColorStop(0, col(.95)); gr.addColorStop(.6, col(.6)); gr.addColorStop(1, col(0));
+      g.fillStyle = gr; g.beginPath(); g.arc(px, py, r, 0, 7); g.fill();
+    }
+    g.globalCompositeOperation = 'source-atop';
+    const sh = g.createLinearGradient(0, ch * .35, 0, ch * .85);
+    sh.addColorStop(0, 'rgba(0,0,0,0)'); sh.addColorStop(1, shade);
+    g.fillStyle = sh; g.fillRect(0, 0, cw, ch);
+    return c;
+  }
+  const spritesFor = tone => sprites[tone] || (sprites[tone] = Array.from({length: 6}, () => makeCloud(tone)));
+
+  function build() {
+    const k = S.kind, cf = {...CONF[k]}, sc = w / 1920;
+    if (!S.day) cf.tone = (k === 'clear' || k === 'partly') ? 'night' : 'nightDark';
+    const imgs = spritesFor(cf.tone);
+    clouds = Array.from({length: cf.n}, () => {
+      const depth = .35 + R() * .65;
+      return {img: imgs[Math.floor(R() * imgs.length)], depth, a: cf.a * (.6 + depth * .4),
+        s: (cf.s[0] + R() * (cf.s[1] - cf.s[0])) * (.6 + depth * .5) * sc,
+        x: -300 * sc + R() * (w + 500 * sc), y: h * (-.08 + R() * .5)};
+    }).sort((a, b) => a.depth - b.depth);
+
+    const rainy = k === 'rain' || k === 'storm';
+    drops = rainy ? Array.from({length: Math.round((140 + 700 * S.intensity) * sc)}, () => ({
+      x: R() * w, y: R() * h, z: .5 + R() * .5, len: 14 + R() * 18, v: 900 + R() * 600})) : [];
+    flakes = k === 'snow' ? Array.from({length: Math.round((120 + 300 * S.intensity) * sc)}, () => ({
+      x: R() * w, y: R() * h, r: 1 + R() * 2.6, v: 40 + R() * 70, ph: R() * 6})) : [];
+    stars = !S.day ? Array.from({length: 180}, () => ({x: R() * w, y: R() * h * .7, r: .4 + R() * 1.2, ph: R() * 6})) : [];
+    fogs = k === 'fog' ? Array.from({length: 7}, (_, i) => ({x: R() * w, y: h * (.35 + i * .1), v: 8 + R() * 14, a: .25 + R() * .2})) : [];
+    const windy = Math.max(0, (S.wind || 0) - 20);
+    streaks = windy ? Array.from({length: Math.min(36, Math.round(windy * 1.2))}, () => newStreak(true)) : [];
+    nextBolt = performance.now() / 1000 + 2;
+  }
+  function newStreak(spread) {
+    const max = .8 + R() * 1.2;
+    return {x: R() * w, y: h * (.05 + R() * .75), len: 80 + R() * 180, life: spread ? R() * max : 0, max};
+  }
+
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, 1.5);
+    w = innerWidth; h = innerHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    build();
+  }
+
+  function sunPos(now) {
+    if (!sunrise || !sunset) return null;
+    const a = +sunrise, b = +sunset, n = +now;
+    if (n < a || n > b) return null;
+    const f = (n - a) / (b - a);
+    return {x: w * (.08 + .84 * f), y: h * (.78 - .62 * Math.sin(Math.PI * f)), edge: Math.min(n - a, b - n) / 60000};
+  }
+  function moonPos(now) {
+    if (!sunrise || !sunset) return null;
+    const DAY = 864e5, n = +now;
+    let a = +sunset; if (n < +sunrise) a -= DAY;
+    const f = (n - a) / (DAY - (sunset - sunrise));
+    if (f < 0 || f > 1) return null;
+    return {x: w * (.08 + .84 * f), y: h * (.7 - .5 * Math.sin(Math.PI * f))};
+  }
+
+  function drawSky(golden) {
+    const p = PAL[S.day ? 'day' : 'night'][S.kind];
+    let [top, mid, bot] = p;
+    if (golden > 0) { mid = mix(mid, '#f3c79a', golden * .45); bot = mix(bot, '#ffab6e', golden * .8); }
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, top); g.addColorStop(.55, mid); g.addColorStop(1, bot);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  }
+
+  function drawSun(p, vis, t) {
+    const r = h * .05;
+    let g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, h * .5);
+    g.addColorStop(0, `rgba(255,244,214,${.55 * vis})`); g.addColorStop(.25, `rgba(255,226,160,${.2 * vis})`);
+    g.addColorStop(1, 'rgba(255,220,150,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(t * .025);
+    for (let i = 0; i < 14; i++) {
+      ctx.rotate(Math.PI * 2 / 14);
+      const len = h * (.32 + .12 * Math.sin(t * .5 + i * 1.7));
+      const rg = ctx.createLinearGradient(0, 0, len, 0);
+      rg.addColorStop(0, `rgba(255,248,220,${.09 * vis})`); rg.addColorStop(1, 'rgba(255,248,220,0)');
+      ctx.fillStyle = rg; ctx.beginPath();
+      ctx.moveTo(0, -r * .4); ctx.lineTo(len, -r * .14); ctx.lineTo(len, r * .14); ctx.lineTo(0, r * .4);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+    g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 1.6);
+    g.addColorStop(0, `rgba(255,255,250,${vis})`); g.addColorStop(.55, `rgba(255,246,212,${vis})`);
+    g.addColorStop(1, 'rgba(255,230,160,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 1.6, 0, 7); ctx.fill();
+  }
+
+  function drawMoon(p, vis) {
+    const r = h * .034;
+    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, h * .26);
+    g.addColorStop(0, `rgba(205,218,255,${.2 * vis})`); g.addColorStop(1, 'rgba(205,218,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.globalAlpha = vis; ctx.fillStyle = '#f3f0e7';
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(150,150,140,.22)';
+    [[-.3, -.2, .22], [.25, .15, .18], [-.05, .4, .12], [.35, -.35, .1]].forEach(([dx, dy, rr]) => {
+      ctx.beginPath(); ctx.arc(p.x + dx * r, p.y + dy * r, rr * r, 0, 7); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  function drawStars(t, vis) {
+    ctx.fillStyle = '#fff';
+    for (const s of stars) {
+      ctx.globalAlpha = vis * (.35 + .65 * (.5 + .5 * Math.sin(t * 1.3 + s.ph)));
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawClouds(dt, t) {
+    const sc = w / 1920, gusty = (S.gust || 0) > (S.wind || 0) + 15 ? .3 : .08;
+    const speed = (6 + (S.wind || 0) * 1.7) * sc * (1 + gusty * Math.sin(t * .6));
+    for (const c of clouds) {
+      const cw = c.img.width * c.s, ch = c.img.height * c.s;
+      c.x += speed * (.35 + c.depth * .9) * dt;
+      if (c.x > w + 40) { c.x = -cw - R() * 200 * sc; c.y = h * (-.08 + R() * .5); }
+      ctx.globalAlpha = c.a;
+      ctx.drawImage(c.img, c.x, c.y, cw, ch);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawFog(dt) {
+    ctx.fillStyle = 'rgba(222,227,233,.16)'; ctx.fillRect(0, 0, w, h);
+    for (const f of fogs) {
+      f.x += f.v * dt; if (f.x > w * 1.6) f.x = -w * .6;
+      ctx.save(); ctx.translate(f.x, f.y); ctx.scale(1, .22);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, w * .6);
+      g.addColorStop(0, `rgba(230,234,238,${f.a})`); g.addColorStop(1, 'rgba(230,234,238,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, w * .6, 0, 7); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawRain(dt) {
+    const vx = (S.wind || 0) * 9;
+    for (const [lo, hi, lw, a] of [[.5, .75, 1, .22], [.75, 1.01, 1.6, .38]]) {
+      ctx.strokeStyle = `rgba(205,222,255,${a})`; ctx.lineWidth = lw; ctx.beginPath();
+      for (const d of drops) {
+        if (d.z < lo || d.z >= hi) continue;
+        d.y += d.v * d.z * dt; d.x += vx * d.z * dt;
+        if (d.y > h) { d.y = -d.len - R() * h * .2; d.x = R() * (w + 400) - 200; }
+        if (d.x > w + 60) d.x -= w + 120;
+        const k = d.len / d.v;
+        ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - vx * k, d.y - d.len);
+      }
+      ctx.stroke();
+    }
+  }
+
+  function drawSnow(dt, t) {
+    const vx = (S.wind || 0) * 3.5;
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    for (const f of flakes) {
+      f.y += f.v * dt; f.x += (vx + Math.sin(t + f.ph) * 22) * dt;
+      if (f.y > h) { f.y = -5; f.x = R() * w; }
+      if (f.x > w + 10) f.x = -10;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, 7); ctx.fill();
+    }
+  }
+
+  function drawStreaks(dt) {
+    const v = 500 + (S.wind || 0) * 16;
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < streaks.length; i++) {
+      const s = streaks[i];
+      s.life += dt; s.x += v * dt;
+      if (s.life > s.max || s.x > w + s.len) { streaks[i] = newStreak(false); continue; }
+      const a = Math.sin(Math.PI * s.life / s.max) * .28;
+      const g = ctx.createLinearGradient(s.x - s.len, 0, s.x, 0);
+      g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, `rgba(255,255,255,${a})`);
+      ctx.strokeStyle = g; ctx.beginPath();
+      ctx.moveTo(s.x - s.len, s.y); ctx.quadraticCurveTo(s.x - s.len / 2, s.y - 6, s.x, s.y); ctx.stroke();
+    }
+  }
+
+  function makeBolt() {
+    let x = w * (.15 + R() * .7), y = 0;
+    const pts = [[x, y]], end = h * (.45 + R() * .25);
+    while (y < end) { x += (R() - .5) * w * .05; y += h * (.03 + R() * .04); pts.push([x, y]); }
+    return pts;
+  }
+
+  function drawLightning(t, dt) {
+    if (t > nextBolt) {
+      flash = 1; bolt = makeBolt(); reflash = R() < .6 ? .12 : 0;
+      nextBolt = t + 2.5 + R() * (10 - S.intensity * 6);
+    }
+    if (reflash > 0) { reflash -= dt; if (reflash <= 0) flash = .85; }
+    if (flash <= 0) return;
+    if (bolt && flash > .45) {
+      ctx.save(); ctx.strokeStyle = `rgba(240,246,255,${flash})`; ctx.lineWidth = 2.6;
+      ctx.shadowColor = '#bcd7ff'; ctx.shadowBlur = 28; ctx.beginPath();
+      bolt.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+      ctx.stroke(); ctx.restore();
+    }
+    ctx.fillStyle = `rgba(225,235,255,${flash * .5})`; ctx.fillRect(0, 0, w, h);
+    flash -= dt * 3.2;
+  }
+
+  let last = performance.now();
+  function frame(nowMs) {
+    const dt = Math.min(.05, (nowMs - last) / 1000), t = nowMs / 1000; last = nowMs;
+    const now = new Date();
+    const sp = sunPos(now);
+    const golden = S.day && sp && (S.kind === 'clear' || S.kind === 'partly') ? Math.max(0, 1 - sp.edge / 70) : 0;
+    drawSky(golden);
+    if (S.day) {
+      const vis = SUN_VIS[S.kind] || 0;
+      if (vis) drawSun(sp || {x: w * .72, y: h * .2}, vis, t);
+    } else {
+      const vis = STAR_VIS[S.kind] || 0;
+      if (vis) { drawStars(t, vis); drawMoon(moonPos(now) || {x: w * .75, y: h * .2}, vis); }
+    }
+    drawClouds(dt, t);
+    if (S.kind === 'fog') drawFog(dt);
+    if (drops.length) drawRain(dt);
+    if (flakes.length) drawSnow(dt, t);
+    if (streaks.length) drawStreaks(dt);
+    if (S.kind === 'storm') drawLightning(t, dt);
+    requestAnimationFrame(frame);
+  }
+
+  addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(frame);
+
+  return {
+    setScene(scene, rise, set) {
+      sunrise = rise ? new Date(rise) : null;
+      sunset = set ? new Date(set) : null;
+      const k = `${scene.kind}|${scene.day}|${scene.intensity}|${Math.round(scene.wind / 5)}`;
+      S = scene;
+      if (k !== key) { key = k; build(); }
+    },
+  };
+})();
+
+load();
+setInterval(load, 10 * 60 * 1000);
+</script>
+</body>
+</html>

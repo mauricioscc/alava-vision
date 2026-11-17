@@ -1,0 +1,1 @@
+"""AlavaVision - Admin Application"""

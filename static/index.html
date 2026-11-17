@@ -1,0 +1,1402 @@
+<!doctype html>
+<!--
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.3.0
+
+  COMO ABRIR
+    1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
+    2. Acesse http://localhost:8080/  (senha = ADMIN_PASSWORD do .env)
+    Precisa ser aberto pelo servidor: aberto direto como arquivo, as chamadas /api não funcionam.
+
+  COMO REVERTER
+    Copie backup_v0.2.0_20261117/static/index.html por cima deste arquivo.
+
+  MAPA DO CÓDIGO
+    Tokens de cor/tema ............. :root (CSS)
+    Barra lateral e abas ........... .sidebar, .nav-btn, showTab()
+    "No ar agora" (topo) ........... #live-pill, refreshLive()
+    Login .......................... #login-overlay, doLogin(), api()
+    Aba Playlists .................. #tab-playlists, loadPlaylists(), loadPlaylist(), renderPlaylist()
+      criar/renomear/excluir ....... newPlaylist(), renamePlaylist(), deletePlaylist(), #name-modal
+      reordenar (arrastar) ......... setupDrag()
+      miniaturas ................... thumbHtml()
+    Cadastro de item ............... #modal, openAddModal(), openEdit(), saveItem(), uploadFile()
+    Pré-visualização ............... #pv-overlay, .pv-screen, .pv-media, openPreview(), fitFrame()
+    Aba Programação (timeline) ..... #tab-schedule, objeto TL, loadTimeline(), renderTimeline()
+      biblioteca arrastável ........ renderLibrary(), .chip
+      régua, trilhas, zoom ......... renderRuler(), .track, setZoom(), PXH
+      soltar da biblioteca ......... setupTrackDrop(), addBlock(), .ghost
+      mover/redimensionar blocos ... attachBlockDrag(), placeBlock(), .blk .h-l / .h-r
+      edição numérica .............. renderEditor(), applyTimes(), #tl-editor
+      sobreposições ................ computeConflicts(), renderWarnings(), .blk.conflict
+      indicador de horário atual ... #now-line, updateNowLine()
+      salvar ....................... scheduleSave(), saveSchedule()  → PUT /api/schedule
+    Configurações .................. #tab-settings, loadSettings(), saveSettings()
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alava Vision</title>
+<link rel="icon" type="image/png" href="/assets/logo%20alava%20minimalista.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:      #0d0f14;
+  --surface: #161920;
+  --card:    #1c2030;
+  --border:  #252a3a;
+  --muted:   #5a6280;
+  --text:    #e2e6f3;
+  --soft:    #9aa3c0;
+  --accent:  #3b82f6;
+  --accent2: #6366f1;
+  --ok:      #22c55e;
+  --warn:    #f59e0b;
+  --danger:  #ef4444;
+  --grid:    rgba(255,255,255,.04);
+  --grid-strong: rgba(255,255,255,.10);
+  --radius:  10px;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f0f2f8; --surface: #fff; --card: #f7f8fc; --border: #dde1ee;
+    --muted: #8b93ad; --text: #111827; --soft: #5b6476;
+    --grid: rgba(15,23,42,.05); --grid-strong: rgba(15,23,42,.12);
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
+button,input,select,textarea{font-family:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Layout */
+.sidebar{width:220px;min-height:100vh;background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;flex-shrink:0;position:sticky;top:0;align-self:flex-start;height:100vh}
+.sidebar-logo{padding:24px 20px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.sidebar-logo span{font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:700;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.nav{padding:12px 8px;flex:1;display:flex;flex-direction:column;gap:2px}
+.nav-btn{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;
+  font-size:14px;color:var(--soft);border:none;background:none;width:100%;text-align:left;transition:.15s}
+.nav-btn:hover{background:var(--card);color:var(--text)}
+.nav-btn.active{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-weight:500}
+.nav-btn .ic{font-size:15px;width:20px;text-align:center}
+.sidebar-footer{padding:16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{padding:14px 28px;border-bottom:1px solid var(--border);display:flex;align-items:center;flex-wrap:wrap;
+  justify-content:space-between;gap:12px;background:var(--surface);position:sticky;top:0;z-index:10}
+.topbar h1{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700}
+.top-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.content{padding:24px 28px;flex:1;min-width:0}
+
+.live-pill{display:inline-flex;align-items:center;gap:8px;padding:5px 12px;border-radius:20px;font-size:12.5px;
+  border:1px solid var(--border);color:var(--soft);background:var(--card);max-width:420px}
+.live-pill b{color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);flex:none;animation:livepulse 1.6s infinite}
+@keyframes livepulse{50%{opacity:.35}}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;text-decoration:none;
+  font-size:14px;font-weight:500;cursor:pointer;border:1px solid transparent;transition:.15s;white-space:nowrap}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-primary:hover:not(:disabled){filter:brightness(1.1)}
+.btn-ghost{background:transparent;color:var(--soft);border-color:var(--border)}
+.btn-ghost:hover:not(:disabled){background:var(--card);color:var(--text)}
+.btn-danger{background:transparent;color:var(--danger);border-color:transparent}
+.btn-danger:hover:not(:disabled){background:color-mix(in srgb,var(--danger) 12%,transparent)}
+.btn-sm{padding:5px 10px;font-size:13px}
+.btn-icon{padding:6px;width:32px;height:32px;justify-content:center;border-radius:6px}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+.section-title{font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:700;margin-bottom:16px}
+
+/* Playlists */
+.pl-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px}
+.pl-toolbar select{width:auto;min-width:220px}
+.pl-toolbar .spacer{flex:1}
+.cycle{font-size:13px;color:var(--soft)}
+.playlist{display:flex;flex-direction:column;gap:8px}
+.pl-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  display:grid;grid-template-columns:22px 64px minmax(0,1fr) auto auto auto;align-items:center;gap:12px;
+  padding:10px 14px;transition:.15s;cursor:grab}
+.pl-item:hover{border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+.pl-item.dragging{opacity:.5;border-style:dashed}
+.pl-item.over{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
+.drag-handle{color:var(--muted);font-size:16px;cursor:grab;user-select:none}
+.thumb{width:64px;height:36px;border-radius:5px;background:#000;overflow:hidden;display:grid;place-items:center;
+  font-size:18px;border:1px solid var(--border);cursor:pointer;padding:0}
+.thumb img,.thumb video{width:100%;height:100%;object-fit:cover;display:block}
+.pl-info{min-width:0}
+.pl-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pl-meta{font-size:12px;color:var(--soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pl-meta a{color:var(--muted);text-decoration:none}
+.type-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:20px;
+  font-size:11px;font-weight:600;letter-spacing:.03em}
+.badge-url{background:color-mix(in srgb,#3b82f6 15%,transparent);color:#3b82f6}
+.badge-image{background:color-mix(in srgb,#a855f7 15%,transparent);color:#a855f7}
+.badge-video{background:color-mix(in srgb,#ec4899 15%,transparent);color:#ec4899}
+.badge-weather{background:color-mix(in srgb,#06b6d4 15%,transparent);color:#06b6d4}
+.badge-traffic{background:color-mix(in srgb,#f59e0b 15%,transparent);color:#d97706}
+.badge-message{background:color-mix(in srgb,#22c55e 15%,transparent);color:#16a34a}
+.pl-duration{font-size:13px;color:var(--soft);white-space:nowrap;font-variant-numeric:tabular-nums}
+.toggle{position:relative;display:inline-block;width:36px;height:20px}
+.toggle input{position:absolute;opacity:0;width:0;height:0}
+.toggle-track{position:absolute;inset:0;background:var(--border);border-radius:10px;transition:.2s;cursor:pointer}
+.toggle input:checked+.toggle-track{background:var(--accent)}
+.toggle input:focus-visible+.toggle-track{outline:2px solid var(--accent);outline-offset:2px}
+.toggle-thumb{position:absolute;left:3px;top:3px;width:14px;height:14px;background:#fff;
+  border-radius:50%;transition:.2s;pointer-events:none}
+.toggle input:checked~.toggle-thumb{transform:translateX(16px)}
+.pl-actions{display:flex;gap:4px}
+.empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
+.empty-state .ic{font-size:44px;display:block;margin-bottom:12px}
+
+/* Modais */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;
+  justify-content:center;z-index:100;backdrop-filter:blur(4px);padding:16px}
+.overlay[hidden]{display:none}
+.overlay.top{z-index:120}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  width:560px;max-width:100%;max-height:92vh;display:flex;flex-direction:column;
+  box-shadow:0 24px 64px rgba(0,0,0,.5)}
+.modal-header{padding:18px 24px 14px;border-bottom:1px solid var(--border);display:flex;
+  align-items:center;justify-content:space-between;gap:12px}
+.modal-title{font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:700}
+.modal-sub{font-size:12px;color:var(--soft);margin-top:2px}
+.modal-body{padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:16px}
+.modal-footer{padding:14px 24px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+
+/* Pré-visualização: tela 1920×1080 renderizada e reduzida para caber no modal */
+.pv-modal{width:980px}
+.pv-screen{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:8px;background:#000;
+  border:1px solid var(--border)}
+.pv-screen iframe{position:absolute;top:0;left:0;width:1920px;height:1080px;border:0;transform-origin:0 0;background:transparent}
+.pv-fallback{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;
+  color:#9aa3c0;font-size:13px;line-height:1.6}
+.pv-media{display:flex;justify-content:center;align-items:center;background:#000;border-radius:8px;min-height:200px}
+.pv-media img,.pv-media video{max-width:100%;max-height:68vh;object-fit:contain;display:block}
+.pv-note{font-size:12.5px;color:var(--soft);line-height:1.5}
+.pv-note a{color:var(--accent)}
+
+/* Tipos */
+.type-tabs{display:flex;gap:6px;flex-wrap:wrap}
+.type-tab{padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;
+  border:1px solid var(--border);background:transparent;color:var(--soft);transition:.15s}
+.type-tab:hover{border-color:var(--accent);color:var(--accent)}
+.type-tab.active{background:color-mix(in srgb,var(--accent) 15%,transparent);border-color:var(--accent);color:var(--accent)}
+
+/* Formulários */
+.form-group{display:flex;flex-direction:column;gap:6px;min-width:0}
+label{font-size:13px;font-weight:500;color:var(--soft)}
+input[type=text],input[type=number],input[type=url],input[type=password],input[type=time],input[type=color],select,textarea{
+  width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+  padding:9px 12px;border-radius:8px;font-size:14px;transition:.15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+textarea{resize:vertical;min-height:80px}
+input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.inline{display:flex;gap:8px}
+.inline > :first-child{flex:1;min-width:0}
+.hint{font-size:12px;color:var(--muted);line-height:1.5}
+
+.upload-area{border:2px dashed var(--border);border-radius:var(--radius);padding:28px;
+  text-align:center;cursor:pointer;transition:.2s;color:var(--muted)}
+.upload-area:hover,.upload-area.drag{border-color:var(--accent);color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 5%,transparent)}
+.upload-area input{display:none}
+.upload-preview{margin-top:12px;max-width:100%;max-height:180px;border-radius:8px;object-fit:contain}
+
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+
+/* ── Timeline ─────────────────────────────────────────────────────────────── */
+.tl-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.seg button{background:transparent;border:0;color:var(--soft);padding:6px 12px;font-size:13px;cursor:pointer}
+.seg button + button{border-left:1px solid var(--border)}
+.seg button.active{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-weight:600}
+.save-state{font-size:12.5px;color:var(--soft);margin-left:auto}
+.save-state.err{color:var(--danger)}
+.tl-layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:16px;align-items:start}
+.lib{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;
+  max-height:calc(100vh - 170px);overflow:auto;position:sticky;top:76px}
+.lib-title{font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:700}
+.lib h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:16px 0 8px;font-weight:600}
+.lib h4{font-size:11.5px;color:var(--soft);margin:10px 0 6px;font-weight:500}
+.chip{display:flex;align-items:center;gap:8px;padding:7px 8px 7px 10px;border:1px solid var(--border);border-radius:8px;
+  background:var(--surface);cursor:grab;font-size:13px;margin-bottom:6px;user-select:none}
+.chip:hover{border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
+.chip:active{cursor:grabbing}
+.chip .dot{width:9px;height:9px;border-radius:3px;flex:none}
+.chip .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip .sub{font-size:11px;color:var(--muted);white-space:nowrap}
+.chip .pv{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;padding:2px 4px;border-radius:4px}
+.chip .pv:hover{color:var(--accent);background:var(--card)}
+
+.tl{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);
+  display:grid;grid-template-columns:132px minmax(0,1fr);overflow:hidden}
+.tl-labels{border-right:1px solid var(--border);background:var(--surface)}
+.tl-labels .ruler-sp{height:34px;border-bottom:1px solid var(--border)}
+.tl-label{height:76px;padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;gap:2px}
+.tl-label:last-child,#trk-item{border-bottom:0}
+.tl-label b{font-size:13px}
+.tl-label span{font-size:11px;color:var(--muted);line-height:1.3}
+.tl-scroll{overflow-x:auto;position:relative;scrollbar-width:thin}
+.tl-canvas{position:relative}
+.ruler{height:34px;position:relative;border-bottom:1px solid var(--border);background:var(--surface)}
+.tick{position:absolute;top:0;bottom:0;border-left:1px solid var(--grid-strong)}
+.tick.minor{top:20px;border-left-color:var(--grid)}
+.tick span{position:absolute;top:7px;left:5px;font-size:11px;color:var(--soft);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tick.minor span{top:-4px;font-size:10px;color:var(--muted)}
+.track{height:76px;position:relative;border-bottom:1px solid var(--border);
+  background-image:linear-gradient(to right,var(--grid-strong) 1px,transparent 1px),linear-gradient(to right,var(--grid) 1px,transparent 1px);
+  background-size:var(--hour) 100%,var(--step) 100%}
+.track.drop-ok{background-color:color-mix(in srgb,var(--accent) 8%,transparent)}
+.blk{--c:#6366f1;position:absolute;top:9px;height:58px;border-radius:7px;
+  background:color-mix(in srgb,var(--c) 24%,var(--surface));border:1px solid color-mix(in srgb,var(--c) 75%,transparent);
+  padding:7px 10px;overflow:hidden;cursor:grab;touch-action:none;user-select:none;min-width:6px}
+.blk.dragging{cursor:grabbing;box-shadow:0 6px 18px rgba(0,0,0,.35);z-index:5}
+.blk .t{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.blk .r{font-size:11px;color:var(--soft);white-space:nowrap;font-variant-numeric:tabular-nums;pointer-events:none;margin-top:2px}
+.blk .h{position:absolute;top:0;bottom:0;width:9px;cursor:ew-resize}
+.blk .h-l{left:0}
+.blk .h-r{right:0}
+.blk .h::after{content:"";position:absolute;top:32%;bottom:32%;left:3px;width:3px;border-radius:2px;
+  background:color-mix(in srgb,var(--c) 85%,transparent);opacity:.7}
+.blk.sel{outline:2px solid var(--c);outline-offset:1px;z-index:3}
+.blk.conflict{border-color:var(--danger);
+  background-image:repeating-linear-gradient(135deg,color-mix(in srgb,var(--danger) 26%,transparent) 0 6px,transparent 6px 12px)}
+.blk.nested{border:1px dashed var(--warn)}
+.blk.compact{padding:6px 10px}
+.blk.compact .r{display:none}
+.blk.live .t::before{content:"NO AR";font-size:9px;font-weight:700;letter-spacing:.06em;color:#fff;background:var(--danger);
+  padding:1px 5px;border-radius:3px;margin-right:6px;vertical-align:1px}
+.ghost{position:absolute;top:9px;bottom:9px;border:2px dashed var(--accent);border-radius:7px;pointer-events:none;
+  background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.now-line{position:absolute;top:0;bottom:0;width:2px;background:var(--danger);z-index:6;pointer-events:none}
+.now-line::before{content:attr(data-t);position:absolute;top:8px;left:4px;font-size:10px;font-weight:600;
+  background:var(--danger);color:#fff;padding:1px 5px;border-radius:3px;font-variant-numeric:tabular-nums}
+.tl-below{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:16px;margin-top:16px}
+#tl-editor .ed-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+#tl-editor .ed-head .dot{width:12px;height:12px;border-radius:4px;flex:none}
+#tl-editor .ed-name{font-weight:600}
+.ed-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.ed-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.rules{font-size:13px;color:var(--soft);line-height:1.6}
+.rules ol{padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.rules b{color:var(--text)}
+.warns{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.warn{font-size:12.5px;line-height:1.5;padding:9px 12px;border-radius:8px;border:1px solid color-mix(in srgb,var(--danger) 50%,transparent);
+  background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--text)}
+.warn.info{border-color:color-mix(in srgb,var(--warn) 55%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+
+/* Status */
+#status{position:fixed;bottom:20px;right:20px;padding:10px 16px;border-radius:8px;max-width:calc(100vw - 40px);
+  font-size:13px;font-weight:500;pointer-events:none;z-index:200}
+#status.ok{background:color-mix(in srgb,var(--ok) 20%,var(--surface));color:var(--ok);border:1px solid var(--ok)}
+#status.err{background:color-mix(in srgb,var(--danger) 20%,var(--surface));color:var(--danger);border:1px solid var(--danger)}
+
+@media(max-width:1100px){.tl-layout{grid-template-columns:1fr}.lib{position:static;max-height:none}.tl-below{grid-template-columns:1fr}}
+@media(max-width:700px){
+  .sidebar{display:none}
+  .content{padding:16px}
+  .topbar{padding:12px 16px}
+  .settings-grid,.row2,.ed-fields{grid-template-columns:1fr}
+  .pl-item{grid-template-columns:18px minmax(0,1fr) auto auto;gap:8px}
+  .pl-item .thumb,.pl-item .pl-duration{display:none}
+  .pl-toolbar select{min-width:0;flex:1}
+}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+      <rect width="28" height="28" rx="8" fill="url(#g)"/>
+      <path d="M7 20 L14 8 L21 20" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="14" cy="20" r="2" fill="#fff"/>
+      <defs><linearGradient id="g" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#3b82f6"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>
+    </svg>
+    <span>Alava Vision</span>
+  </div>
+  <nav class="nav">
+    <button class="nav-btn active" onclick="showTab('playlists')" id="nb-playlists"><span class="ic">▶</span> Playlists</button>
+    <button class="nav-btn" onclick="showTab('schedule')" id="nb-schedule"><span class="ic">◷</span> Programação</button>
+    <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
+  </nav>
+  <div class="sidebar-footer">Alava Vision · v0.3.0</div>
+</aside>
+
+<div class="main">
+  <header class="topbar">
+    <h1 id="page-title">Playlists</h1>
+    <div class="top-actions">
+      <span class="live-pill" id="live-pill" title="O que a TV está exibindo agora"><span class="live-dot"></span><span>No ar:</span><b id="live-name">—</b><span id="live-until"></span></span>
+      <button class="btn btn-primary" onclick="openAddModal()" id="add-btn">+ Adicionar item</button>
+    </div>
+  </header>
+
+  <!-- ═══ Aba Playlists ═══ -->
+  <div class="content" id="tab-playlists">
+    <div class="pl-toolbar">
+      <label for="pl-select" style="margin:0">Playlist</label>
+      <select id="pl-select" onchange="selectPlaylist(this.value)"></select>
+      <button class="btn btn-ghost btn-sm" onclick="newPlaylist()">+ Nova playlist</button>
+      <button class="btn btn-ghost btn-sm" onclick="renamePlaylist()">Renomear</button>
+      <button class="btn btn-danger btn-sm" id="pl-del" onclick="deletePlaylist()">Excluir</button>
+      <span class="spacer"></span>
+      <span class="cycle" id="cycle-time"></span>
+    </div>
+    <div id="playlist" class="playlist"></div>
+  </div>
+
+  <!-- ═══ Aba Programação (timeline) ═══ -->
+  <div class="content" id="tab-schedule" hidden>
+    <div class="tl-toolbar">
+      <span class="hint" style="color:var(--soft)">Zoom</span>
+      <div class="seg" id="zoom-seg">
+        <button data-z="60" onclick="setZoom(60)">Hora</button>
+        <button data-z="30" onclick="setZoom(30)">30 min</button>
+        <button data-z="15" onclick="setZoom(15)">15 min</button>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="scrollToNow()">Ir para agora</button>
+      <span class="save-state" id="save-state"></span>
+    </div>
+
+    <div class="tl-layout">
+      <aside class="lib" id="lib">
+        <div class="lib-title">Biblioteca</div>
+        <p class="hint" style="margin-top:4px">Arraste para a linha do tempo.</p>
+        <h3>Playlists</h3>
+        <div id="lib-playlists"></div>
+        <h3>Itens avulsos</h3>
+        <div id="lib-items"></div>
+      </aside>
+
+      <div style="min-width:0">
+        <div class="tl">
+          <div class="tl-labels">
+            <div class="ruler-sp"></div>
+            <div class="tl-label" id="lbl-playlist"><b>Playlists</b><span>Trilha base</span></div>
+            <div class="tl-label" id="lbl-item"><b>Itens avulsos</b><span>Sobrepõem a base</span></div>
+          </div>
+          <div class="tl-scroll" id="tl-scroll">
+            <div class="tl-canvas" id="tl-canvas">
+              <div class="ruler" id="ruler"></div>
+              <div class="track" id="trk-playlist" data-kind="playlist"></div>
+              <div class="track" id="trk-item" data-kind="item"></div>
+              <div class="now-line" id="now-line"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tl-below">
+          <div class="card" id="tl-editor"></div>
+          <div class="card rules">
+            <div class="section-title" style="margin-bottom:10px">Como a TV decide o que exibir</div>
+            <ol>
+              <li><b>Item avulso</b> no horário: a TV mostra só ele e a playlist da base fica pausada.</li>
+              <li>Senão, a <b>playlist</b> agendada no horário.</li>
+              <li>Fora de qualquer bloco: a <b>Playlist padrão</b>.</li>
+            </ol>
+            <p style="margin-top:8px">Dois blocos na mesma trilha e no mesmo horário: vale o que <b>começa mais tarde</b>. Se começarem juntos, vale o mais curto.</p>
+            <div class="warns" id="tl-warns"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Aba Configurações ═══ -->
+  <div class="content" id="tab-settings" hidden>
+    <div class="card">
+      <div class="section-title">Clima e localização</div>
+      <div class="settings-grid">
+        <div class="form-group"><label for="s-city">Cidade</label><input type="text" id="s-city" placeholder="Rio de Janeiro"></div>
+        <div class="form-group"><label for="s-lat">Latitude</label><input type="text" id="s-lat" placeholder="-22.9068"></div>
+        <div class="form-group"><label for="s-lon">Longitude</label><input type="text" id="s-lon" placeholder="-43.1729"></div>
+        <div class="form-group"><label for="s-maps">Google Maps Embed API Key <span class="hint">(opcional)</span></label><input type="text" id="s-maps" placeholder="AIza..."></div>
+        <div class="form-group">
+          <label for="s-ibge">Código IBGE do município</label>
+          <input type="text" id="s-ibge" placeholder="3304557">
+          <span class="hint">Usado para os alertas oficiais do INMET. Rio de Janeiro: 3304557.</span>
+        </div>
+      </div>
+      <div style="margin-top:16px"><button class="btn btn-primary" onclick="saveSettings()">Salvar configurações</button></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title">Pré-visualizar tela de clima</div>
+      <p class="hint" style="margin-bottom:12px">Abre a tela em uma nova aba. Os cenários de teste simulam condições sem alterar a previsão real.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-primary btn-sm" href="/view/weather" target="_blank">Previsão real</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=clear&wind=8" target="_blank">Sol</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=partly&wind=15" target="_blank">Parcialmente nublado</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=overcast&wind=12" target="_blank">Nublado</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=rain&wind=20" target="_blank">Chuva</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=storm&wind=45&alert=orange" target="_blank">Tempestade + alerta</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=partly&wind=60&alert=yellow" target="_blank">Ventania</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=fog&wind=5" target="_blank">Nevoeiro</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=clear&day=0" target="_blank">Noite</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=heavy&wind=30&alert=red" target="_blank">Chuva forte + perigo</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Modal: adicionar/editar item ═══ -->
+<div class="overlay" id="modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header">
+      <div><div class="modal-title" id="modal-title">Adicionar item</div><div class="modal-sub" id="modal-sub"></div></div>
+      <button class="btn btn-icon btn-ghost" onclick="closeModal()" aria-label="Fechar">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="type-selector" class="form-group">
+        <label>Tipo de conteúdo</label>
+        <div class="type-tabs">
+          <button class="type-tab active" data-type="url" onclick="setType('url')">🌐 Site</button>
+          <button class="type-tab" data-type="image" onclick="setType('image')">🖼 Imagem</button>
+          <button class="type-tab" data-type="video" onclick="setType('video')">🎬 Vídeo</button>
+          <button class="type-tab" data-type="weather" onclick="setType('weather')">🌤 Clima</button>
+          <button class="type-tab" data-type="traffic" onclick="setType('traffic')">🚗 Trânsito</button>
+          <button class="type-tab" data-type="message" onclick="setType('message')">💬 Mensagem</button>
+        </div>
+      </div>
+
+      <div class="form-group"><label for="f-name">Nome</label><input type="text" id="f-name" placeholder="Nome para identificação"></div>
+      <div class="form-group"><label for="f-duration">Duração (segundos)</label><input type="number" id="f-duration" value="30" min="3" max="3600"></div>
+
+      <div id="cfg-url" class="form-group">
+        <label for="f-url">URL</label>
+        <div class="inline">
+          <input type="url" id="f-url" placeholder="https://exemplo.com">
+          <button class="btn btn-ghost" type="button" onclick="previewUrlField()">Pré-visualizar</button>
+        </div>
+      </div>
+
+      <div id="cfg-image" hidden class="form-group">
+        <label>Arquivo de imagem</label>
+        <label class="upload-area" id="img-drop" ondragover="event.preventDefault()" ondrop="onDrop(event,'image')">
+          <input type="file" id="f-img-file" accept="image/*" onchange="onFileChange(event,'image')">
+          <div id="img-drop-text">📁 Clique ou arraste a imagem aqui<br><span class="hint">JPG, PNG, GIF, WebP, SVG</span></div>
+          <img id="img-preview" class="upload-preview" alt="" hidden>
+        </label>
+      </div>
+
+      <div id="cfg-video" hidden class="form-group">
+        <label>Arquivo de vídeo</label>
+        <label class="upload-area" id="vid-drop" ondragover="event.preventDefault()" ondrop="onDrop(event,'video')">
+          <input type="file" id="f-vid-file" accept="video/*" onchange="onFileChange(event,'video')">
+          <div id="vid-drop-text">📁 Clique ou arraste o vídeo aqui<br><span class="hint">MP4, WebM, MOV</span></div>
+        </label>
+        <video id="vid-preview" class="upload-preview" controls muted playsinline hidden></video>
+      </div>
+
+      <div id="cfg-weather" hidden>
+        <p class="hint" style="color:var(--soft)">Relógio, clima atual, previsão de 7 dias com chance de chuva, céu animado conforme o tempo e alertas oficiais do INMET.<br>Configure a localização em Configurações.</p>
+      </div>
+      <div id="cfg-traffic" hidden>
+        <p class="hint" style="color:var(--soft)">Mapa de trânsito em tempo real via Waze ou Google Maps.<br>Configure as coordenadas em Configurações.</p>
+      </div>
+
+      <div id="cfg-message" hidden class="form-group" style="gap:12px">
+        <div class="form-group"><label for="f-msg-text">Texto da mensagem</label><textarea id="f-msg-text" placeholder="São 12h, bom almoço!" rows="3"></textarea></div>
+        <div class="row2">
+          <div class="form-group"><label for="f-msg-start">Exibir a partir de</label><input type="text" id="f-msg-start" placeholder="12:00" maxlength="5"></div>
+          <div class="form-group"><label for="f-msg-end">Exibir até</label><input type="text" id="f-msg-end" placeholder="14:00" maxlength="5"></div>
+        </div>
+        <p class="hint">Deixe em branco para sempre exibir.</p>
+        <div class="row2">
+          <div class="form-group"><label for="f-msg-bg">Cor do fundo</label><input type="color" id="f-msg-bg" value="#0a0a1a"></div>
+          <div class="form-group"><label for="f-msg-fg">Cor do texto</label><input type="color" id="f-msg-fg" value="#ffffff"></div>
+        </div>
+        <div class="row2">
+          <div class="form-group"><label for="f-msg-size">Tamanho da fonte (px)</label><input type="number" id="f-msg-size" value="72" min="20" max="200"></div>
+          <div class="form-group" style="justify-content:flex-end">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-bottom:10px"><input type="checkbox" id="f-msg-clock" checked> Mostrar relógio</label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveItem()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Modal: pré-visualização ═══ -->
+<div class="overlay top" id="pv-overlay" hidden onclick="if(event.target===this)closePreview()">
+  <div class="modal pv-modal" role="dialog" aria-modal="true" aria-labelledby="pv-title">
+    <div class="modal-header">
+      <div><div class="modal-title" id="pv-title">Pré-visualização</div><div class="modal-sub" id="pv-sub"></div></div>
+      <button class="btn btn-icon btn-ghost" onclick="closePreview()" aria-label="Fechar">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="pv-body"></div>
+      <p class="pv-note" id="pv-note"></p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Modal: nome de playlist ═══ -->
+<div class="overlay top" id="name-modal" hidden>
+  <div class="modal" style="width:420px" role="dialog" aria-modal="true" aria-labelledby="name-title">
+    <div class="modal-header"><div class="modal-title" id="name-title">Nova playlist</div></div>
+    <div class="modal-body">
+      <div class="form-group"><label for="name-input">Nome</label>
+        <input type="text" id="name-input" placeholder="Ex.: Almoço, Manhã, Reunião geral" onkeydown="if(event.key==='Enter')confirmName()"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeNameModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="confirmName()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Login ═══ -->
+<div class="overlay top" id="login-overlay" hidden>
+  <div class="modal" style="width:380px">
+    <div class="modal-header" style="justify-content:center;border-bottom:none;padding-bottom:8px">
+      <div style="text-align:center">
+        <svg width="40" height="40" viewBox="0 0 28 28" fill="none" style="margin-bottom:8px" aria-hidden="true">
+          <rect width="28" height="28" rx="8" fill="url(#gl)"/>
+          <path d="M7 20 L14 8 L21 20" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="14" cy="20" r="2" fill="#fff"/>
+          <defs><linearGradient id="gl" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#3b82f6"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>
+        </svg>
+        <div class="modal-title" style="font-size:20px">Alava Vision</div>
+      </div>
+    </div>
+    <div class="modal-body" style="gap:12px">
+      <p id="login-msg" style="color:var(--danger);font-size:13px;text-align:center;min-height:18px"></p>
+      <div class="form-group"><label for="login-pass">Senha de acesso</label>
+        <input type="password" id="login-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    </div>
+    <div class="modal-footer" style="justify-content:center">
+      <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="doLogin()">Entrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="status" role="status" hidden></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const uid = () => Math.random().toString(16).slice(2, 14).padEnd(12, '0');
+const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬'};
+const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem'};
+const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e'};
+const PL_COLOR = '#6366f1';
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch(e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch(e) {} },
+  del(k) { try { localStorage.removeItem(k); } catch(e) {} },
+};
+
+// ─── Autenticação ─────────────────────────────────────────────────────────────
+let authB64 = store.get('av_auth') || '';
+const authHeader = () => authB64 ? {'Authorization': 'Basic ' + authB64} : {};
+
+function showLogin(msg) {
+  $('login-msg').textContent = msg || '';
+  $('login-overlay').hidden = false;
+  $('login-pass').value = '';
+  setTimeout(() => $('login-pass').focus(), 50);
+}
+
+async function doLogin() {
+  const pass = $('login-pass').value.trim();
+  if (!pass) return;
+  authB64 = btoa('admin:' + pass);
+  try {
+    await api('GET', '/api/ping');
+    store.set('av_auth', authB64);
+    $('login-overlay').hidden = true;
+    await boot();
+  } catch(e) {
+    authB64 = ''; store.del('av_auth');
+    showLogin(e.message === '401' ? 'Senha incorreta. Tente novamente.'
+      : 'Não foi possível conectar ao servidor. Verifique se ele está rodando.');
+  }
+}
+
+async function api(method, path, body) {
+  const opts = {method, headers: {'Content-Type': 'application/json', ...authHeader()}};
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (r.status === 401) { showLogin('Sessão expirada. Informe a senha novamente.'); throw new Error('401'); }
+  if (!r.ok) {
+    let detail = '';
+    try { detail = (await r.json()).detail || ''; } catch(e) {}
+    throw new Error(detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+let statusTimer;
+function status(msg, type = 'ok') {
+  const el = $('status');
+  el.textContent = msg; el.className = type; el.hidden = false;
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { el.hidden = true; }, 3200);
+}
+
+// ─── "No ar agora" ────────────────────────────────────────────────────────────
+let liveSlot = 'default';
+async function refreshLive() {
+  try {
+    const s = await api('GET', '/api/player/state');
+    liveSlot = s.slot || 'default';
+    $('live-name').textContent = s.source?.name || '—';
+    $('live-until').textContent = s.source?.until ? `até ${s.source.until}` : '';
+    document.querySelectorAll('.blk').forEach(b => b.classList.toggle('live', liveSlot.endsWith(':' + b.dataset.id)));
+  } catch(e) {}
+}
+
+// ═══ PLAYLISTS ════════════════════════════════════════════════════════════════
+let playlists = [], items = [], allItems = [];
+let currentPl = store.get('av_pl') || 'main';
+let editId = null, currentType = 'url', pendingFile = null;
+
+async function loadPlaylists() {
+  playlists = await api('GET', '/api/playlists');
+  if (!playlists.some(p => p.id === currentPl)) currentPl = 'main';
+  $('pl-select').innerHTML = playlists.map(p =>
+    `<option value="${esc(p.id)}"${p.id === currentPl ? ' selected' : ''}>${esc(p.name)} (${p.item_count})</option>`).join('');
+  $('pl-del').disabled = currentPl === 'main';
+  $('pl-del').title = currentPl === 'main' ? 'A playlist padrão não pode ser excluída' : '';
+}
+
+async function loadAllItems() {
+  allItems = (await api('GET', '/api/playlist')).items;
+}
+
+async function loadPlaylist() {
+  items = (await api('GET', `/api/playlist?playlist_id=${encodeURIComponent(currentPl)}`)).items;
+  renderPlaylist();
+}
+
+async function selectPlaylist(id) {
+  currentPl = id; store.set('av_pl', id);
+  $('pl-del').disabled = id === 'main';
+  await loadPlaylist();
+}
+
+function renderPlaylist() {
+  const el = $('playlist');
+  const active = items.filter(i => i.active);
+  const total = active.reduce((s, i) => s + i.duration, 0);
+  $('cycle-time').textContent = items.length
+    ? `${active.length} ativos · ciclo de ${Math.floor(total / 60) ? Math.floor(total / 60) + 'min ' : ''}${total % 60}s` : '';
+  if (!items.length) {
+    el.innerHTML = `<div class="empty-state"><span class="ic">📺</span>Esta playlist está vazia.<br>Clique em <strong>+ Adicionar item</strong> para começar.</div>`;
+    return;
+  }
+  el.innerHTML = '';
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'pl-item';
+    div.dataset.id = item.id;
+    div.draggable = true;
+    div.innerHTML = `
+      <span class="drag-handle" title="Arraste para reordenar">⠿</span>
+      <button class="thumb" title="Pré-visualizar" data-act="pv">${thumbHtml(item)}</button>
+      <div class="pl-info">
+        <div class="pl-name"><span class="type-badge badge-${item.type}">${TYPE_ICONS[item.type]} ${TYPE_NAMES[item.type]}</span>
+          <span style="margin-left:8px">${esc(item.name)}</span></div>
+        <div class="pl-meta">${itemMeta(item)}</div>
+      </div>
+      <div class="pl-duration">${item.duration}s</div>
+      <label class="toggle" title="${item.active ? 'Desativar' : 'Ativar'}">
+        <input type="checkbox" ${item.active ? 'checked' : ''} aria-label="Item ativo">
+        <div class="toggle-track"></div><div class="toggle-thumb"></div>
+      </label>
+      <div class="pl-actions">
+        <button class="btn btn-icon btn-ghost btn-sm" data-act="pv" title="Pré-visualizar" aria-label="Pré-visualizar">👁</button>
+        <button class="btn btn-icon btn-ghost btn-sm" data-act="edit" title="Editar" aria-label="Editar">✏</button>
+        <button class="btn btn-icon btn-danger btn-sm" data-act="del" title="Remover" aria-label="Remover">🗑</button>
+      </div>`;
+    div.querySelectorAll('[data-act="pv"]').forEach(b => b.onclick = () => openPreview(item));
+    div.querySelector('[data-act="edit"]').onclick = () => openEdit(item.id);
+    div.querySelector('[data-act="del"]').onclick = () => deleteItem(item.id);
+    div.querySelector('.toggle input').onchange = e => toggleItem(item.id, e.target.checked);
+    setupDrag(div);
+    el.appendChild(div);
+  });
+}
+
+function thumbHtml(item) {
+  const url = esc(item.config?.url || '');
+  if (item.type === 'image' && url) return `<img src="${url}" alt="" loading="lazy">`;
+  if (item.type === 'video' && url) return `<video src="${url}#t=1" muted preload="metadata"></video>`;
+  return TYPE_ICONS[item.type] || '▢';
+}
+
+function itemMeta(item) {
+  const c = item.config || {};
+  if (item.type === 'url') return `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc((c.url || '').slice(0, 70))}</a>`;
+  if (item.type === 'message') return esc((c.text || '').slice(0, 60)) + (c.time_start ? ` · ${esc(c.time_start)}–${esc(c.time_end)}` : '');
+  if (item.type === 'image' || item.type === 'video') return esc((c.url || '').split('/').pop());
+  return '';
+}
+
+let dragSrc = null;
+function setupDrag(el) {
+  el.addEventListener('dragstart', e => { dragSrc = el; el.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+  el.addEventListener('dragend', () => { dragSrc = null; el.classList.remove('dragging'); document.querySelectorAll('.pl-item').forEach(x => x.classList.remove('over')); });
+  el.addEventListener('dragover', e => { if (!dragSrc) return; e.preventDefault(); if (dragSrc !== el) el.classList.add('over'); });
+  el.addEventListener('dragleave', () => el.classList.remove('over'));
+  el.addEventListener('drop', async e => {
+    e.preventDefault(); el.classList.remove('over');
+    if (!dragSrc || dragSrc === el) return;
+    const list = $('playlist'), els = [...list.querySelectorAll('.pl-item')];
+    if (els.indexOf(dragSrc) < els.indexOf(el)) el.after(dragSrc); else el.before(dragSrc);
+    try {
+      await api('PUT', '/api/items/reorder', [...list.querySelectorAll('.pl-item')].map(x => x.dataset.id));
+      await loadPlaylist();
+    } catch(err) { status('Erro ao reordenar: ' + err.message, 'err'); }
+  });
+}
+
+async function toggleItem(id, active) {
+  try { await api('PUT', `/api/items/${id}`, {active}); await loadPlaylist(); }
+  catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+
+async function deleteItem(id) {
+  if (!confirm('Remover este item? Os blocos dele na programação também serão removidos.')) return;
+  try { await api('DELETE', `/api/items/${id}`); status('Item removido'); await refreshAll(); }
+  catch(e) { status('Erro ao remover: ' + e.message, 'err'); }
+}
+
+// Criar / renomear / excluir playlist
+let nameCallback = null;
+function openNameModal(title, value, cb) {
+  $('name-title').textContent = title; $('name-input').value = value || '';
+  nameCallback = cb; $('name-modal').hidden = false;
+  setTimeout(() => $('name-input').focus(), 50);
+}
+function closeNameModal() { $('name-modal').hidden = true; nameCallback = null; }
+async function confirmName() {
+  const v = $('name-input').value.trim();
+  if (!v) { status('Informe um nome', 'err'); return; }
+  const cb = nameCallback; closeNameModal();
+  if (cb) await cb(v);
+}
+
+function newPlaylist() {
+  openNameModal('Nova playlist', '', async name => {
+    try {
+      const r = await api('POST', '/api/playlists', {name});
+      currentPl = r.id; store.set('av_pl', r.id);
+      await loadPlaylists(); await loadPlaylist();
+      status(`Playlist "${name}" criada`);
+    } catch(e) { status('Erro: ' + e.message, 'err'); }
+  });
+}
+
+function renamePlaylist() {
+  const p = playlists.find(x => x.id === currentPl);
+  openNameModal('Renomear playlist', p?.name, async name => {
+    try { await api('PUT', `/api/playlists/${currentPl}`, {name}); await loadPlaylists(); status('Playlist renomeada'); }
+    catch(e) { status('Erro: ' + e.message, 'err'); }
+  });
+}
+
+async function deletePlaylist() {
+  const p = playlists.find(x => x.id === currentPl);
+  if (!p || p.id === 'main') return;
+  if (!confirm(`Excluir a playlist "${p.name}" e seus ${p.item_count} itens? Os blocos dela na programação também serão removidos.`)) return;
+  try {
+    await api('DELETE', `/api/playlists/${p.id}`);
+    currentPl = 'main'; store.set('av_pl', 'main');
+    await refreshAll(); status('Playlist excluída');
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+
+// ─── Modal de item ────────────────────────────────────────────────────────────
+function resetItemForm() {
+  ['f-name', 'f-url', 'f-msg-text', 'f-msg-start', 'f-msg-end'].forEach(id => $(id).value = '');
+  $('f-duration').value = '30';
+  $('f-msg-bg').value = '#0a0a1a'; $('f-msg-fg').value = '#ffffff';
+  $('f-msg-size').value = '72'; $('f-msg-clock').checked = true;
+  $('img-preview').hidden = true; $('img-drop-text').hidden = false;
+  const v = $('vid-preview'); v.pause(); v.removeAttribute('src'); v.hidden = true;
+  $('vid-drop-text').innerHTML = '📁 Clique ou arraste o vídeo aqui<br><span class="hint">MP4, WebM, MOV</span>';
+}
+
+function openAddModal() {
+  editId = null; pendingFile = null;
+  resetItemForm();
+  $('modal-title').textContent = 'Adicionar item';
+  $('modal-sub').textContent = 'Na playlist: ' + (playlists.find(p => p.id === currentPl)?.name || 'Playlist padrão');
+  $('type-selector').hidden = false;
+  setType('url');
+  $('modal').hidden = false;
+}
+
+function openEdit(id) {
+  const item = items.find(i => i.id === id);
+  if (!item) return;
+  editId = id; pendingFile = null;
+  resetItemForm();
+  $('modal-title').textContent = 'Editar item';
+  $('modal-sub').textContent = TYPE_NAMES[item.type];
+  $('type-selector').hidden = true;
+  currentType = item.type;
+  showCfgPanel(item.type);
+  $('f-name').value = item.name;
+  $('f-duration').value = item.duration;
+  const c = item.config || {};
+  if (item.type === 'url') $('f-url').value = c.url || '';
+  if (item.type === 'image' && c.url) { $('img-preview').src = c.url; $('img-preview').hidden = false; $('img-drop-text').hidden = true; }
+  if (item.type === 'video' && c.url) { $('vid-preview').src = c.url; $('vid-preview').hidden = false; }
+  if (item.type === 'message') {
+    $('f-msg-text').value = c.text || '';
+    $('f-msg-start').value = c.time_start || '';
+    $('f-msg-end').value = c.time_end || '';
+    $('f-msg-bg').value = c.bg_color || '#0a0a1a';
+    $('f-msg-fg').value = c.text_color || '#ffffff';
+    $('f-msg-size').value = c.font_size || 72;
+    $('f-msg-clock').checked = c.show_clock !== false;
+  }
+  $('modal').hidden = false;
+}
+
+function closeModal() { $('modal').hidden = true; $('vid-preview').pause(); }
+
+function setType(t) {
+  currentType = t;
+  document.querySelectorAll('.type-tab').forEach(b => b.classList.toggle('active', b.dataset.type === t));
+  showCfgPanel(t);
+  const names = {url:'Site', image:'Imagem', video:'Vídeo', weather:'Previsão do Tempo', traffic:'Trânsito', message:'Mensagem'};
+  if (!$('f-name').value || Object.values(names).includes($('f-name').value)) $('f-name').value = names[t];
+  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15}[t] || 30;
+}
+
+function showCfgPanel(t) {
+  ['url', 'image', 'video', 'weather', 'traffic', 'message'].forEach(x => $(`cfg-${x}`).hidden = x !== t);
+}
+
+function normalizeUrl(u) { u = u.trim(); return u && !/^https?:\/\//i.test(u) ? 'https://' + u : u; }
+
+function previewUrlField() {
+  const url = normalizeUrl($('f-url').value);
+  if (!url) { status('Informe a URL primeiro', 'err'); return; }
+  openPreview({type: 'url', name: $('f-name').value || 'Site', config: {url}});
+}
+
+async function saveItem() {
+  const name = $('f-name').value.trim();
+  const duration = parseInt($('f-duration').value) || 30;
+  if (!name) { status('Informe um nome', 'err'); return; }
+  let config = {};
+  if (currentType === 'url') {
+    const url = normalizeUrl($('f-url').value);
+    if (!url) { status('Informe a URL', 'err'); return; }
+    config = {url};
+  } else if (currentType === 'image' || currentType === 'video') {
+    if (pendingFile) config = {url: pendingFile.url};
+    else if (editId) config = items.find(i => i.id === editId)?.config || {};
+    else { status('Selecione um arquivo', 'err'); return; }
+  } else if (currentType === 'message') {
+    config = {
+      text: $('f-msg-text').value, time_start: $('f-msg-start').value, time_end: $('f-msg-end').value,
+      bg_color: $('f-msg-bg').value, text_color: $('f-msg-fg').value,
+      font_size: parseInt($('f-msg-size').value) || 72, show_clock: $('f-msg-clock').checked,
+    };
+  }
+  try {
+    if (editId) { await api('PUT', `/api/items/${editId}`, {name, duration, config}); status('Item atualizado'); }
+    else { await api('POST', '/api/items', {type: currentType, name, duration, config, playlist_id: currentPl}); status('Item adicionado'); }
+    closeModal();
+    await refreshAll();
+  } catch(e) { status('Erro ao salvar: ' + e.message, 'err'); }
+}
+
+function onDrop(e, type) { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) uploadFile(f, type); }
+function onFileChange(e, type) { const f = e.target.files[0]; if (f) uploadFile(f, type); }
+
+async function uploadFile(file, type) {
+  const area = $(type === 'image' ? 'img-drop' : 'vid-drop');
+  area.classList.add('drag');
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const r = await fetch('/api/upload', {method: 'POST', body: fd, headers: authHeader()});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    pendingFile = {url: data.url, type: data.type};
+    if (type === 'image') {
+      $('img-preview').src = data.url; $('img-preview').hidden = false; $('img-drop-text').hidden = true;
+    } else {
+      $('vid-drop-text').textContent = '✔ ' + file.name + ' — clique para trocar';
+      $('vid-preview').src = data.url; $('vid-preview').hidden = false;
+    }
+    status('Arquivo enviado');
+  } catch(e) { status('Erro no upload: ' + e.message, 'err'); }
+  finally { area.classList.remove('drag'); }
+}
+
+// ═══ PRÉ-VISUALIZAÇÃO ═════════════════════════════════════════════════════════
+// Imagem e vídeo aparecem em tamanho real (limitado ao modal). Sites e widgets
+// são renderizados num iframe de 1920×1080 (o tamanho da TV) e reduzidos com
+// transform: scale(), então a prévia mostra o layout exatamente como na tela.
+function previewSrc(item) {
+  if (item.type === 'url') return item.config?.url || '';
+  if (item.type === 'weather' || item.type === 'traffic') return `/view/${item.type}`;
+  return `/view/${item.type}/${item.id}`;
+}
+
+function openPreview(item) {
+  $('pv-title').textContent = item.name || 'Pré-visualização';
+  $('pv-sub').textContent = TYPE_NAMES[item.type] + (item.duration ? ` · ${item.duration}s na tela` : '');
+  const body = $('pv-body'), note = $('pv-note');
+  note.textContent = '';
+  if (item.type === 'image') {
+    body.innerHTML = `<div class="pv-media"><img id="pv-img" src="${esc(item.config?.url)}" alt=""></div>`;
+    $('pv-img').onload = e => note.textContent = `Tamanho original: ${e.target.naturalWidth} × ${e.target.naturalHeight} px.`;
+  } else if (item.type === 'video') {
+    body.innerHTML = `<div class="pv-media"><video src="${esc(item.config?.url)}" controls autoplay muted playsinline></video></div>`;
+    note.textContent = 'Começa sem som, como na TV. Use os controles para pausar ou ativar o áudio.';
+  } else {
+    const src = previewSrc(item);
+    body.innerHTML = `<div class="pv-screen"><div class="pv-fallback">Carregando prévia…<br>
+      Se esta mensagem continuar visível, o site não permite ser exibido dentro do painel.<br>Na TV ele abre normalmente.</div>
+      <iframe src="${esc(src)}" title="Prévia"
+      sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe></div>`;
+    note.innerHTML = item.type === 'url'
+      ? `Prévia em escala de uma tela 1920×1080. Se ficar em branco, o site não permite ser exibido dentro de outras páginas; na TV ele abre normalmente. <a href="${esc(src)}" target="_blank" rel="noopener">Abrir em nova aba</a>`
+      : 'Prévia em escala de uma tela 1920×1080, igual à TV (sem a marca d\'água, que o player adiciona).';
+  }
+  $('pv-overlay').hidden = false;
+  requestAnimationFrame(fitFrame);
+}
+
+function fitFrame() {
+  const box = document.querySelector('.pv-screen');
+  if (box) box.querySelector('iframe').style.transform = `scale(${box.clientWidth / 1920})`;
+}
+addEventListener('resize', fitFrame);
+
+function closePreview() { $('pv-overlay').hidden = true; $('pv-body').innerHTML = ''; }
+
+// ═══ PROGRAMAÇÃO (TIMELINE) ═══════════════════════════════════════════════════
+// Cada bloco = {id, kind: 'playlist'|'item', ref_id, start_min, end_min}
+// start/end em minutos do dia (0 a 1440). A trilha é definida pelo tipo:
+// playlists sempre na trilha base, itens sempre na trilha de sobreposição.
+// Todo arraste/edição altera TL.blocks e agenda o salvamento (PUT /api/schedule).
+const PXH = {60: 90, 30: 180, 15: 360};          // pixels por hora em cada zoom
+const TL = {zoom: +(store.get('av_zoom') || 60), blocks: [], sel: null, saveTimer: null, loaded: false};
+if (!PXH[TL.zoom]) TL.zoom = 60;
+const ppm = () => PXH[TL.zoom] / 60;              // pixels por minuto
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const snap = m => Math.round(m / TL.zoom) * TL.zoom; // encaixe na grade do zoom
+const fmt = m => m >= 1440 ? '24:00' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const nowMin = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
+
+async function loadTimeline() {
+  const [s] = await Promise.all([api('GET', '/api/schedule'), loadPlaylists(), loadAllItems()]);
+  TL.blocks = s.blocks;
+  renderLibrary();
+  renderTimeline();
+  refreshLive();
+  if (!TL.loaded) { TL.loaded = true; scrollToNow(); }
+}
+
+function refName(b) {
+  if (b.kind === 'playlist') return playlists.find(p => p.id === b.ref_id)?.name || '(playlist removida)';
+  return allItems.find(i => i.id === b.ref_id)?.name || '(item removido)';
+}
+function blockColor(b) {
+  return b.kind === 'playlist' ? PL_COLOR : (TYPE_COLORS[allItems.find(i => i.id === b.ref_id)?.type] || '#64748b');
+}
+
+// Biblioteca: chips arrastáveis (HTML5 drag & drop). O tipo vai no dataTransfer
+// como "application/x-alava-<tipo>" para a trilha certa acender durante o arraste.
+function chipHtml(kind, id, name, color, sub, previewable) {
+  return `<div class="chip" draggable="true" data-kind="${kind}" data-id="${esc(id)}">
+    <span class="dot" style="background:${color}"></span><span class="nm" title="${esc(name)}">${esc(name)}</span>
+    ${sub ? `<span class="sub">${esc(sub)}</span>` : ''}
+    ${previewable ? `<button class="pv" title="Pré-visualizar" aria-label="Pré-visualizar ${esc(name)}">👁</button>` : ''}</div>`;
+}
+
+function renderLibrary() {
+  $('lib-playlists').innerHTML = playlists.map(p =>
+    chipHtml('playlist', p.id, p.name, PL_COLOR, `${p.item_count} itens`, false)).join('');
+  $('lib-items').innerHTML = playlists.map(p => {
+    const its = allItems.filter(i => i.playlist_id === p.id);
+    if (!its.length) return '';
+    return `<h4>${esc(p.name)}</h4>` + its.map(i =>
+      chipHtml('item', i.id, i.name, TYPE_COLORS[i.type], TYPE_NAMES[i.type], true)).join('');
+  }).join('') || '<p class="hint">Nenhum item cadastrado.</p>';
+  document.querySelectorAll('#lib .chip').forEach(ch => {
+    ch.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', JSON.stringify({kind: ch.dataset.kind, id: ch.dataset.id}));
+      e.dataTransfer.setData('application/x-alava-' + ch.dataset.kind, '1');
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+    ch.addEventListener('dragend', hideGhost);
+    const pv = ch.querySelector('.pv');
+    if (pv) pv.onclick = () => { const it = allItems.find(i => i.id === ch.dataset.id); if (it) openPreview(it); };
+  });
+}
+
+function renderRuler() {
+  let h = '';
+  for (let m = 0; m < 1440; m += TL.zoom) {
+    const major = m % 60 === 0;
+    h += `<div class="tick${major ? '' : ' minor'}" style="left:${m * ppm()}px"><span>${fmt(m)}</span></div>`;
+  }
+  $('ruler').innerHTML = h;
+}
+
+function renderTimeline() {
+  const W = 1440 * ppm();
+  $('tl-canvas').style.width = W + 'px';
+  document.querySelectorAll('#zoom-seg button').forEach(b => b.classList.toggle('active', +b.dataset.z === TL.zoom));
+  renderRuler();
+  const conflicts = computeConflicts();
+  const bad = new Set(conflicts.filter(c => !c.nested).flatMap(c => [c.a.id, c.b.id]));
+  const inner = new Set(conflicts.filter(c => c.nested).map(c => c.inner.id));
+  for (const kind of ['playlist', 'item']) {
+    const trk = $('trk-' + kind);
+    const kb = TL.blocks.filter(b => b.kind === kind);
+    const {lane, count} = computeLanes(kb);
+    // Uma faixa: bloco com altura cheia. Várias: cada bloco numa sub-faixa e a trilha cresce.
+    const trackH = count > 1 ? 18 + count * 34 - 4 : 76;
+    trk.style.height = $('lbl-' + kind).style.height = trackH + 'px';
+    trk.style.setProperty('--hour', 60 * ppm() + 'px');
+    trk.style.setProperty('--step', TL.zoom * ppm() + 'px');
+    trk.innerHTML = '';
+    kb.forEach(b => {
+      const el = document.createElement('div');
+      el.className = 'blk' + (b.id === TL.sel ? ' sel' : '')
+        + (bad.has(b.id) ? ' conflict' : inner.has(b.id) ? ' nested' : '')
+        + (liveSlot.endsWith(':' + b.id) ? ' live' : '') + (count > 1 ? ' compact' : '');
+      if (count > 1) { el.style.top = 9 + lane[b.id] * 34 + 'px'; el.style.height = '30px'; }
+      el.dataset.id = b.id;
+      el.style.setProperty('--c', blockColor(b));
+      el.title = `${refName(b)} · ${fmt(b.start_min)}–${fmt(b.end_min)}`;
+      el.innerHTML = `<div class="h h-l" data-h="l"></div><div class="t">${esc(refName(b))}</div>
+        <div class="r"></div><div class="h h-r" data-h="r"></div>`;
+      placeBlock(el, b);
+      attachBlockDrag(el, b);
+      trk.appendChild(el);
+    });
+  }
+  updateNowLine();
+  renderEditor();
+  renderWarnings(conflicts);
+}
+
+// Distribui blocos sobrepostos em sub-faixas (o primeiro espaço livre de cima para baixo),
+// para que nenhum bloco fique escondido atrás de outro e todos possam ser clicados.
+function computeLanes(blocks) {
+  const ends = [], lane = {};
+  [...blocks].sort((a, b) => a.start_min - b.start_min || b.end_min - a.end_min).forEach(b => {
+    let i = ends.findIndex(e => e <= b.start_min);
+    if (i < 0) { i = ends.length; ends.push(0); }
+    ends[i] = b.end_min; lane[b.id] = i;
+  });
+  return {lane, count: Math.max(1, ends.length)};
+}
+
+function placeBlock(el, b) {
+  el.style.left = b.start_min * ppm() + 'px';
+  el.style.width = (b.end_min - b.start_min) * ppm() + 'px';
+  el.querySelector('.r').textContent = `${fmt(b.start_min)}–${fmt(b.end_min)}`;
+}
+
+// Mover (arrastar o corpo) ou redimensionar (arrastar as bordas .h-l / .h-r).
+// Usa Pointer Events com captura, então funciona com mouse, caneta e toque.
+function attachBlockDrag(el, b) {
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    const mode = e.target.dataset.h || 'move';
+    selectBlock(b.id);
+    const x0 = e.clientX, s0 = b.start_min, e0 = b.end_min, len = e0 - s0;
+    const minLen = Math.min(TL.zoom, len);
+    let moved = false;
+    el.setPointerCapture(e.pointerId);
+    const move = ev => {
+      if (!moved && Math.abs(ev.clientX - x0) < 4) return;
+      moved = true; el.classList.add('dragging');
+      const d = (ev.clientX - x0) / ppm();
+      if (mode === 'move') { const s = clamp(snap(s0 + d), 0, 1440 - len); b.start_min = s; b.end_min = s + len; }
+      else if (mode === 'l') b.start_min = clamp(snap(s0 + d), 0, e0 - minLen);
+      else b.end_min = clamp(snap(e0 + d), s0 + minLen, 1440);
+      placeBlock(el, b);
+      updateEditorFields(b);
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (moved) { renderTimeline(); scheduleSave(); }
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  });
+}
+
+function selectBlock(id) {
+  TL.sel = id;
+  document.querySelectorAll('.blk').forEach(x => x.classList.toggle('sel', x.dataset.id === id));
+  renderEditor();
+}
+
+// Soltar um chip da biblioteca: cria um bloco no minuto apontado (encaixado no zoom).
+function dragKind(e) {
+  const t = e.dataTransfer.types;
+  return t.includes('application/x-alava-playlist') ? 'playlist' : t.includes('application/x-alava-item') ? 'item' : null;
+}
+function minuteAt(e) {
+  return clamp(snap((e.clientX - $('tl-canvas').getBoundingClientRect().left) / ppm()), 0, 1439);
+}
+const defaultLen = kind => kind === 'playlist' ? 120 : 30;
+
+function showGhost(kind, m) {
+  const len = defaultLen(kind), s = Math.min(m, 1440 - len);
+  let g = $('tl-ghost');
+  if (!g) { g = document.createElement('div'); g.id = 'tl-ghost'; g.className = 'ghost'; }
+  const trk = $('trk-' + kind);
+  if (g.parentNode !== trk) trk.appendChild(g);
+  g.style.left = s * ppm() + 'px'; g.style.width = len * ppm() + 'px';
+  document.querySelectorAll('.track').forEach(t => t.classList.toggle('drop-ok', t === trk));
+}
+function hideGhost() {
+  $('tl-ghost')?.remove();
+  document.querySelectorAll('.track').forEach(t => t.classList.remove('drop-ok'));
+}
+
+function setupTrackDrop(trk) {
+  trk.addEventListener('dragover', e => {
+    const k = dragKind(e);
+    if (!k) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    showGhost(k, minuteAt(e));
+  });
+  trk.addEventListener('dragleave', e => { if (!e.relatedTarget || !$('tl-canvas').contains(e.relatedTarget)) hideGhost(); });
+  trk.addEventListener('drop', e => {
+    e.preventDefault(); hideGhost();
+    let d; try { d = JSON.parse(e.dataTransfer.getData('text/plain')); } catch(err) { return; }
+    if (d?.kind) addBlock(d.kind, d.id, minuteAt(e), trk.dataset.kind !== d.kind);
+  });
+}
+
+function addBlock(kind, ref, start, movedTrack) {
+  const len = defaultLen(kind), s = Math.min(start, 1440 - len);
+  const b = {id: uid(), kind, ref_id: ref, start_min: s, end_min: s + len};
+  TL.blocks.push(b); TL.sel = b.id;
+  renderTimeline(); scheduleSave();
+  status(movedTrack
+    ? (kind === 'item' ? 'Itens avulsos ficam na trilha de sobreposição' : 'Playlists ficam na trilha base')
+    : `${refName(b)} agendado das ${fmt(b.start_min)} às ${fmt(b.end_min)}`);
+}
+
+function removeBlock(id) {
+  TL.blocks = TL.blocks.filter(b => b.id !== id);
+  if (TL.sel === id) TL.sel = null;
+  renderTimeline(); scheduleSave();
+}
+
+// Edição numérica precisa. O campo "Fim" usa 23:59 para representar o fim do dia.
+const toTime = m => m >= 1440 ? '23:59' : fmt(m);
+const fromTime = (v, isEnd) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(v || ''); if (!m) return null;
+  const t = +m[1] * 60 + +m[2];
+  return isEnd && t === 1439 ? 1440 : t;
+};
+
+function renderEditor() {
+  const el = $('tl-editor'), b = TL.blocks.find(x => x.id === TL.sel);
+  if (!b) {
+    el.innerHTML = `<div class="section-title" style="margin-bottom:8px">Editar bloco</div>
+      <p class="hint" style="color:var(--soft)">Arraste uma playlist ou item da biblioteca para a linha do tempo.
+      Clique em um bloco para editar o horário com precisão. Arraste o meio para mover e as bordas para mudar início e fim.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="ed-head"><span class="dot" style="background:${blockColor(b)}"></span>
+      <div><div class="ed-name">${esc(refName(b))}</div>
+      <div class="hint">${b.kind === 'playlist' ? 'Playlist · trilha base' : 'Item avulso · sobrepõe a base'}</div></div></div>
+    <div class="ed-fields">
+      <div class="form-group"><label for="ed-start">Início</label><input type="time" id="ed-start" step="60" value="${toTime(b.start_min)}"></div>
+      <div class="form-group"><label for="ed-end">Fim</label><input type="time" id="ed-end" step="60" value="${toTime(b.end_min)}"></div>
+    </div>
+    <p class="hint" style="margin-top:8px">Fim 23:59 significa até o fim do dia. Atalho: tecla Delete remove o bloco selecionado.</p>
+    <div class="ed-actions">
+      ${b.kind === 'item' ? '<button class="btn btn-ghost btn-sm" id="ed-pv">👁 Pré-visualizar</button>'
+                          : '<button class="btn btn-ghost btn-sm" id="ed-open">Abrir playlist</button>'}
+      <button class="btn btn-danger btn-sm" id="ed-del">Remover bloco</button>
+    </div>`;
+  $('ed-start').onchange = $('ed-end').onchange = () => applyTimes(b);
+  $('ed-del').onclick = () => removeBlock(b.id);
+  if ($('ed-pv')) $('ed-pv').onclick = () => { const it = allItems.find(i => i.id === b.ref_id); if (it) openPreview(it); };
+  if ($('ed-open')) $('ed-open').onclick = () => { selectPlaylist(b.ref_id).then(() => { showTab('playlists'); loadPlaylists(); }); };
+}
+
+function updateEditorFields(b) {
+  if (TL.sel !== b.id || !$('ed-start')) return;
+  $('ed-start').value = toTime(b.start_min); $('ed-end').value = toTime(b.end_min);
+}
+
+function applyTimes(b) {
+  const s = fromTime($('ed-start').value), e = fromTime($('ed-end').value, true);
+  if (s == null || e == null || e <= s) { status('O fim precisa ser depois do início', 'err'); renderEditor(); return; }
+  b.start_min = s; b.end_min = e;
+  renderTimeline(); scheduleSave();
+}
+
+// Sobreposição na MESMA trilha:
+//   • encaixe (um bloco inteiro dentro do outro, ex.: Almoço 12–14 dentro de 08–18)
+//     → intencional: borda tracejada amarela no bloco interno + nota informativa;
+//   • sobreposição parcial (12–14 e 13–15) → conflito: listra vermelha + aviso.
+// Em ambos os casos o aviso diz qual bloco vale no intervalo.
+// Item avulso sobre playlist NÃO aparece aqui: é o comportamento esperado.
+function computeConflicts() {
+  const out = [];
+  for (const kind of ['playlist', 'item']) {
+    const bs = TL.blocks.filter(b => b.kind === kind).sort((a, b) => a.start_min - b.start_min);
+    for (let i = 0; i < bs.length; i++)
+      for (let j = i + 1; j < bs.length && bs[j].start_min < bs[i].end_min; j++) {
+        const a = bs[i], b = bs[j];
+        const bInA = b.start_min >= a.start_min && b.end_min <= a.end_min;
+        const aInB = a.start_min >= b.start_min && a.end_min <= b.end_min;
+        out.push({a, b, nested: bInA || aInB, inner: bInA ? b : a});
+      }
+  }
+  return out;
+}
+
+function winner(a, b) {
+  if (a.start_min !== b.start_min) return a.start_min > b.start_min ? a : b;
+  return (a.end_min - a.start_min) <= (b.end_min - b.start_min) ? a : b;
+}
+
+function renderWarnings(list) {
+  $('tl-warns').innerHTML = list.map(({a, b, nested, inner}) => {
+    const w = winner(a, b);
+    const s = Math.max(a.start_min, b.start_min), e = Math.min(a.end_min, b.end_min);
+    if (nested) {
+      const outer = inner === a ? b : a;
+      return `<div class="warn info">ℹ <b>${esc(refName(inner))}</b> está encaixado dentro de <b>${esc(refName(outer))}</b>
+        (${fmt(s)}–${fmt(e)}). Nesse intervalo vale <b>${esc(refName(w))}</b>.</div>`;
+    }
+    return `<div class="warn">⚠ <b>${esc(refName(a))}</b> e <b>${esc(refName(b))}</b> se sobrepõem em parte das ${fmt(s)} às ${fmt(e)}
+      na trilha de ${a.kind === 'playlist' ? 'playlists' : 'itens avulsos'}. Nesse intervalo vale <b>${esc(refName(w))}</b>.</div>`;
+  }).join('');
+}
+
+function updateNowLine() {
+  const m = nowMin(), l = $('now-line');
+  l.style.left = m * ppm() + 'px';
+  l.dataset.t = fmt(m);
+}
+
+function scrollToNow() {
+  const sc = $('tl-scroll');
+  sc.scrollLeft = Math.max(0, nowMin() * ppm() - sc.clientWidth / 3);
+}
+
+function setZoom(z) {
+  const sc = $('tl-scroll');
+  const center = (sc.scrollLeft + sc.clientWidth / 2) / ppm();
+  TL.zoom = z; store.set('av_zoom', z);
+  renderTimeline();
+  sc.scrollLeft = Math.max(0, center * ppm() - sc.clientWidth / 2);
+}
+
+// Salvamento automático: espera 400 ms sem novas mudanças e envia a grade inteira.
+function setSave(msg, err) { const s = $('save-state'); s.textContent = msg; s.classList.toggle('err', !!err); }
+function scheduleSave() {
+  setSave('Salvando…');
+  clearTimeout(TL.saveTimer);
+  TL.saveTimer = setTimeout(saveSchedule, 400);
+}
+async function saveSchedule() {
+  try {
+    await api('PUT', '/api/schedule', {blocks: TL.blocks});
+    setSave('Salvo às ' + new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'}));
+    refreshLive();
+  } catch(e) { setSave('Não foi possível salvar: ' + e.message, true); }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (!$('pv-overlay').hidden) closePreview();
+    else if (!$('name-modal').hidden) closeNameModal();
+    else if (!$('modal').hidden) closeModal();
+    return;
+  }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && TL.sel && !$('tab-schedule').hidden
+      && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) {
+    e.preventDefault(); removeBlock(TL.sel);
+  }
+});
+
+// ═══ CONFIGURAÇÕES ════════════════════════════════════════════════════════════
+async function loadSettings() {
+  const s = await api('GET', '/api/settings');
+  $('s-city').value = s.weather_city || '';
+  $('s-lat').value = s.weather_lat || '';
+  $('s-lon').value = s.weather_lon || '';
+  $('s-maps').value = s.maps_api_key || '';
+  $('s-ibge').value = s.ibge_code || '';
+}
+
+async function saveSettings() {
+  try {
+    await api('PUT', '/api/settings', {
+      weather_city: $('s-city').value.trim(), weather_lat: $('s-lat').value.trim(),
+      weather_lon: $('s-lon').value.trim(), maps_api_key: $('s-maps').value.trim(),
+      ibge_code: $('s-ibge').value.trim(),
+    });
+    status('Configurações salvas');
+  } catch(e) { status('Erro ao salvar: ' + e.message, 'err'); }
+}
+
+// ═══ NAVEGAÇÃO E INICIALIZAÇÃO ════════════════════════════════════════════════
+const TITLES = {playlists: 'Playlists', schedule: 'Programação', settings: 'Configurações'};
+function showTab(tab) {
+  Object.keys(TITLES).forEach(t => {
+    $(`tab-${t}`).hidden = t !== tab;
+    $(`nb-${t}`).classList.toggle('active', t === tab);
+  });
+  $('add-btn').hidden = tab !== 'playlists';
+  $('page-title').textContent = TITLES[tab];
+  store.set('av_tab', tab);
+  if (tab === 'settings') loadSettings().catch(() => {});
+  if (tab === 'schedule') loadTimeline().catch(e => status('Erro ao carregar a programação: ' + e.message, 'err'));
+}
+
+async function refreshAll() {
+  await loadPlaylists();
+  await Promise.all([loadPlaylist(), loadAllItems()]);
+  if (!$('tab-schedule').hidden) await loadTimeline();
+  refreshLive();
+}
+
+async function boot() {
+  try { await refreshAll(); } catch(e) {}
+  showTab(store.get('av_tab') || 'playlists');
+}
+
+setupTrackDrop($('trk-playlist'));
+setupTrackDrop($('trk-item'));
+setInterval(() => { updateNowLine(); refreshLive(); }, 30000);
+
+if (authB64) boot(); else { boot(); showLogin(); }
+</script>
+</body>
+</html>

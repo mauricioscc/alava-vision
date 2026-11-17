@@ -1,0 +1,23 @@
+# Segredos (senha do painel, chaves) — use .env.example como modelo
+.env
+
+# Dados em execução: banco, uploads e perfil do Chrome do player (cookies/logins)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Pastas de backup locais (o histórico agora fica no Git)
+backup_*/
+
+# Projetos antigos: só o código entra no repositório
+Old/**/data/
+Old/**/logs/
+Old/**/perfil/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/
