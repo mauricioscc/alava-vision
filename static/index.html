@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.6.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.6.1
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -331,7 +331,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('schedule')" id="nb-schedule"><span class="ic">◷</span> Programação</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.6.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.6.1</div>
 </aside>
 
 <div class="main">
@@ -445,6 +445,8 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
         <a class="btn btn-ghost btn-sm" href="/view/weather?demo=partly&wind=60&alert=yellow" target="_blank">Ventania</a>
         <a class="btn btn-ghost btn-sm" href="/view/weather?demo=fog&wind=5" target="_blank">Nevoeiro</a>
         <a class="btn btn-ghost btn-sm" href="/view/weather?demo=clear&day=0" target="_blank">Noite</a>
+        <a class="btn btn-ghost btn-sm" id="lnk-dusk" href="/view/weather" target="_blank" title="10 min após o pôr do sol de hoje">Crepúsculo</a>
+        <a class="btn btn-ghost btn-sm" id="lnk-dawn" href="/view/weather" target="_blank" title="10 min antes do nascer do sol de hoje">Amanhecer</a>
         <a class="btn btn-ghost btn-sm" href="/view/weather?demo=heavy&wind=30&alert=red" target="_blank">Chuva forte + perigo</a>
       </div>
     </div>
@@ -1354,6 +1356,14 @@ async function loadSettings() {
   $('s-lon').value = s.weather_lon || '';
   $('s-maps').value = s.maps_api_key || '';
   $('s-ibge').value = s.ibge_code || '';
+  // Atalhos de crepúsculo/amanhecer: simulam o horário (?hora=) a partir do pôr/nascer do sol de hoje.
+  try {
+    const w = await api('GET', '/api/weather');
+    const at = (iso, delta) => { const d = new Date(iso); d.setMinutes(d.getMinutes() + delta);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+    $('lnk-dusk').href = `/view/weather?hora=${at(w.sunset, 10)}`;
+    $('lnk-dawn').href = `/view/weather?hora=${at(w.sunrise, -10)}`;
+  } catch(e) {}
 }
 
 async function saveSettings() {

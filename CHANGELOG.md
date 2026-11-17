@@ -7,6 +7,15 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.6.1] — 2026-11-17
+#### Corrigido
+- **A tela de clima demorava a virar noite.** O dado de dia/noite do Open-Meteo vem em blocos de 15 minutos e o servidor guarda a previsão por até 9, então a noite chegava até ~25 minutos depois do pôr do sol. Agora a tela decide pelo relógio, comparando com o nascer e o pôr do sol de hoje, e confere a cada 30 segundos, trocando o céu, o ícone e o texto na hora certa.
+- Depois do pôr do sol, enquanto o dado ainda dizia "dia", o sol era desenhado num ponto fixo alto do céu.
+
+#### Adicionado
+- **Crepúsculo de 20 minutos** após o pôr do sol: o sol desce abaixo do horizonte e o céu passa de dourado para lilás e depois para o azul da noite, com estrelas e lua surgindo aos poucos. O amanhecer faz o caminho inverso nos 20 minutos antes do nascer do sol. Com tempo nublado ou chuvoso o céu só escurece, sem cores quentes.
+- `?hora=HH:MM` no endereço da tela de clima simula outro horário no céu. Novos atalhos "Crepúsculo" e "Amanhecer" em Configurações → Pré-visualizar tela de clima.
+
 ### [0.6.0] — 2026-11-17
 #### Alterado
 - **A tela de clima abre pronta**, sem "--°" nem "Carregando previsão…". O servidor já envia a página com a previsão embutida (`/view/weather`), então ela é desenhada no mesmo instante, sem esperar rede.
