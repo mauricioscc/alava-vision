@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.6.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.6.1** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 

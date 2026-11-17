@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Tela de clima (static/weather.html) · versão 0.6.0
+  Alava Vision — Tela de clima (static/weather.html) · versão 0.6.1
 
   COMO ABRIR / TESTAR (servidor rodando na porta 8080)
     http://localhost:8080/view/weather                         previsão real
@@ -25,6 +25,9 @@
     Fonte ....................... @font-face com static/fonts/inter-latin.woff2 (sem Google Fonts)
     Preenchimento da tela ....... render()
     Céu animado (canvas) ........ Sky (PAL, TONES, CONF, build(), frame(), drawSun/Moon/Clouds/Rain/Snow/Fog/Lightning)
+    Dia / noite ................. isDay() pelo nascer/pôr do sol de hoje; conferido a cada 30 s (final do script)
+    Crepúsculo (20 min) ......... TWILIGHT_MIN, twilight(), twilightColors() (DUSK), twilightSunPos()
+    Simular horário ............. ?hora=HH:MM  → skyNow()  (ex.: /view/weather?hora=18:25)
     Logo Alava .................. .brand (CSS) e <img class="brand"> logo após o canvas.
                                   Só as telas de clima e trânsito têm o logo; os sites aparecem sem ele.
 -->
@@ -269,8 +272,33 @@ const fmtEnd = s => {
 };
 const hm = s => (s || '').slice(11, 16);
 
+// ─── Dia, noite e crepúsculo ──────────────────────────────────────────────────
+// O is_day do Open-Meteo vem em blocos de 15 min e o servidor guarda a previsão por até
+// 9 min, então a noite chegava até ~25 min depois do pôr do sol. Agora a tela decide pelo
+// relógio, comparando com os horários de nascer e pôr do sol de hoje (precisão de minuto).
+// ?hora=HH:MM no endereço simula outro horário no céu (para testar o crepúsculo).
+const TWILIGHT_MIN = 20;   // duração do crepúsculo (após o pôr) e da aurora (antes do nascer)
+
+function skyNow() {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(params.get('hora') || ''), n = new Date();
+  if (m) n.setHours(+m[1], +m[2], 0, 0);
+  return n;
+}
+
+function isDay() {
+  if (params.has('day')) return params.get('day') === '1';
+  if (W && W.sunrise && W.sunset) {
+    const n = +skyNow();
+    return n >= +new Date(W.sunrise) && n < +new Date(W.sunset);
+  }
+  return !!(W && W.current.is_day);
+}
+
+let shownDay = null;
+
 function render() {
-  const c = W.current, today = W.daily[0] || {}, day = !!c.is_day;
+  const c = W.current, today = W.daily[0] || {}, day = isDay();
+  shownDay = day;
   $('city').textContent = W.city || '';
   $('upd').textContent = 'Atualizado às ' + (W.updated_at
     || new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'}));
@@ -362,7 +390,7 @@ const Sky = (() => {
   const SUN_VIS = {clear: 1, partly: .85, overcast: .12, fog: .35, rain: 0, storm: 0, snow: .1};
   const STAR_VIS = {clear: 1, partly: .6};
 
-  const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+  const hex = c => c[0] === '#' ? [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)) : c.match(/\d+/g).slice(0, 3).map(Number);
   const mix = (a, b, t) => { const A = hex(a), B = hex(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t))})`; };
 
   function makeCloud(tone) {
@@ -437,10 +465,43 @@ const Sky = (() => {
     return {x: w * (.08 + .84 * f), y: h * (.7 - .5 * Math.sin(Math.PI * f))};
   }
 
-  function drawSky(golden) {
-    const p = PAL[S.day ? 'day' : 'night'][S.kind];
-    let [top, mid, bot] = p;
+  // Crepúsculo: {kind: 'dusk' | 'dawn', k} com k = 1 no pôr/nascer do sol e 0 em noite plena.
+  function twilight(now) {
+    if (!sunrise || !sunset || S.day) return null;
+    const after = (now - sunset) / 60000, before = (sunrise - now) / 60000;
+    if (after >= 0 && after < TWILIGHT_MIN) return {kind: 'dusk', k: 1 - after / TWILIGHT_MIN};
+    if (before > 0 && before <= TWILIGHT_MIN) return {kind: 'dawn', k: 1 - before / TWILIGHT_MIN};
+    return null;
+  }
+
+  function skyColors(day, golden) {
+    let [top, mid, bot] = PAL[day ? 'day' : 'night'][S.kind];
     if (golden > 0) { mid = mix(mid, '#f3c79a', golden * .45); bot = mix(bot, '#ffab6e', golden * .8); }
+    return [top, mid, bot];
+  }
+
+  // Céu de crepúsculo (topo, meio, horizonte). Céu limpo/parcial: dourado → lilás → noite.
+  // Nublado/chuva/neblina: só escurece do cinza do dia para o da noite, sem cores quentes.
+  const DUSK = ['#1c2b5c', '#7b5591', '#f2875e'];
+  function twilightColors(tw, warm) {
+    const night = skyColors(false, 0);
+    if (!warm) return night.map((c, i) => mix(c, skyColors(true, 0)[i], tw.k * .8));
+    const golden = skyColors(true, 1);
+    return tw.k > .5
+      ? DUSK.map((c, i) => mix(c, golden[i], (tw.k - .5) * 2))
+      : night.map((c, i) => mix(c, DUSK[i], tw.k * 2));
+  }
+
+  // Sol abaixo do horizonte no crepúsculo: continua descendo a partir de onde se pôs
+  // (ou sobe até onde vai nascer), sumindo aos poucos.
+  function twilightSunPos(tw) {
+    const sink = 1 - tw.k;
+    return tw.kind === 'dusk'
+      ? {x: w * (.92 + .03 * sink), y: h * (.78 + .32 * sink)}
+      : {x: w * (.08 - .03 * sink), y: h * (.78 + .32 * sink)};
+  }
+
+  function drawSky([top, mid, bot]) {
     const g = ctx.createLinearGradient(0, 0, 0, h);
     g.addColorStop(0, top); g.addColorStop(.55, mid); g.addColorStop(1, bot);
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
@@ -586,16 +647,21 @@ const Sky = (() => {
   let last = performance.now();
   function frame(nowMs) {
     const dt = Math.min(.05, (nowMs - last) / 1000), t = nowMs / 1000; last = nowMs;
-    const now = new Date();
-    const sp = sunPos(now);
-    const golden = S.day && sp && (S.kind === 'clear' || S.kind === 'partly') ? Math.max(0, 1 - sp.edge / 70) : 0;
-    drawSky(golden);
+    const now = skyNow();
+    const warm = S.kind === 'clear' || S.kind === 'partly';
+    const sp = S.day ? sunPos(now) : null;
+    const tw = twilight(now);
+    if (S.day) drawSky(skyColors(true, warm && sp ? Math.max(0, 1 - sp.edge / 70) : 0));
+    else if (tw) drawSky(twilightColors(tw, warm));
+    else drawSky(skyColors(false, 0));
+
+    const sunVis = SUN_VIS[S.kind] || 0;
     if (S.day) {
-      const vis = SUN_VIS[S.kind] || 0;
-      if (vis) drawSun(sp || {x: w * .72, y: h * .2}, vis, t);
+      if (sunVis) drawSun(sp || {x: w * .72, y: h * .2}, sunVis, t);
     } else {
-      const vis = STAR_VIS[S.kind] || 0;
-      if (vis) { drawStars(t, vis); drawMoon(moonPos(now) || {x: w * .75, y: h * .2}, vis); }
+      if (tw && sunVis) drawSun(twilightSunPos(tw), sunVis * tw.k, t);
+      const vis = (STAR_VIS[S.kind] || 0) * (tw ? 1 - tw.k : 1);   // estrelas e lua surgem aos poucos
+      if (vis > .01) { drawStars(t, vis); drawMoon(moonPos(now) || {x: w * .75, y: h * .2}, vis); }
     }
     drawClouds(dt, t);
     if (S.kind === 'fog') drawFog(dt);
@@ -625,6 +691,8 @@ const Sky = (() => {
 // enquanto a tela estiver aberta (o servidor renova os dados a cada 9 min).
 if (W) { applyDemo(); render(); } else load();
 setInterval(load, 10 * 60 * 1000);
+// Confere a cada 30 s se passou do pôr (ou do nascer) do sol e troca céu, ícone e texto na hora.
+setInterval(() => { if (W && isDay() !== shownDay) render(); }, 30 * 1000);
 </script>
 </body>
 </html>
