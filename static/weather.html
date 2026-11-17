@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Tela de clima (static/weather.html) · versão 0.5.0
+  Alava Vision — Tela de clima (static/weather.html) · versão 0.6.0
 
   COMO ABRIR / TESTAR (servidor rodando na porta 8080)
     http://localhost:8080/view/weather                         previsão real
@@ -20,7 +20,9 @@
     Relógio ..................... tick()
     Códigos de tempo (WMO) ...... DESC, INTENSITY, kindOf(), desc()
     Ícones SVG .................. icon(), sunI(), moonI(), cloudI()
-    Dados / modo demonstração ... load(), fakeData(), applyDemo()
+    Dados / modo demonstração ... let W (previsão embutida pelo servidor), load(), fakeData(), applyDemo()
+    Abertura instantânea ........ final do script: com W embutido desenha na hora, sem rede
+    Fonte ....................... @font-face com static/fonts/inter-latin.woff2 (sem Google Fonts)
     Preenchimento da tela ....... render()
     Céu animado (canvas) ........ Sky (PAL, TONES, CONF, build(), frame(), drawSun/Moon/Clouds/Rain/Snow/Fog/Lightning)
     Logo Alava .................. .brand (CSS) e <img class="brand"> logo após o canvas.
@@ -31,8 +33,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Alava Vision · Clima</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;600;700&display=swap" rel="stylesheet">
+<link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <style>
+/* Fonte Inter salva no projeto (licença OFL): a TV não depende do Google Fonts para abrir a tela.
+   Arquivo variável — um só arquivo cobre os pesos 200 a 700 usados aqui. */
+@font-face{font-family:'Inter';src:url('/static/fonts/inter-latin.woff2') format('woff2');
+  font-weight:200 700;font-style:normal;font-display:swap}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{width:100%;height:100%;overflow:hidden;background:#0b1530;color:#fff;
   font-family:'Inter',system-ui,'Segoe UI',sans-serif;font-variant-numeric:tabular-nums}
@@ -151,7 +157,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0b1530;color:#fff;
 <script>
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
-let W = null;
+// O servidor troca a marca abaixo pela previsão do cache (server.py → view_weather), então a
+// tela já nasce preenchida. Aberta sem o servidor (ou sem previsão ainda), W fica null e load() busca.
+let W = /*__WX_DATA__*/null;
 
 // ─── Relógio ──────────────────────────────────────────────────────────────────
 function tick() {
@@ -264,7 +272,8 @@ const hm = s => (s || '').slice(11, 16);
 function render() {
   const c = W.current, today = W.daily[0] || {}, day = !!c.is_day;
   $('city').textContent = W.city || '';
-  $('upd').textContent = 'Atualizado às ' + new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'});
+  $('upd').textContent = 'Atualizado às ' + (W.updated_at
+    || new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'}));
   $('cur-icon').innerHTML = icon(c.code, day);
   $('temp').textContent = r0(c.temp) + '°';
   $('cond').textContent = desc(c.code, day);
@@ -612,7 +621,9 @@ const Sky = (() => {
   };
 })();
 
-load();
+// Com a previsão embutida, desenha na hora; sem ela, busca. Depois atualiza a cada 10 min
+// enquanto a tela estiver aberta (o servidor renova os dados a cada 9 min).
+if (W) { applyDemo(); render(); } else load();
 setInterval(load, 10 * 60 * 1000);
 </script>
 </body>

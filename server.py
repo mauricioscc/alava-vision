@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.5.0
+Alava Vision — Servidor (server.py) · versão 0.6.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -31,7 +31,10 @@ MAPA DO CÓDIGO
     O que está no ar agora .......... resolve_now(), _pick_block(), GET /api/player/state
     Upload e arquivos ............... POST /api/upload, /uploads/* e /assets/* (StaticFiles)
     Configurações ................... load_settings(), GET/PUT /api/settings
-    Clima ........................... _fetch_forecast(), _build_weather(), _inmet_alerts(), GET /api/weather
+    Clima ........................... _fetch_forecast(), _build_weather(), _inmet_alerts(), get_weather(),
+                                      GET /api/weather
+      atualização em 2º plano ....... _weather_refresher() (a cada 9 min, iniciada em startup())
+      previsão embutida na tela ..... view_weather() troca WX_DATA_MARK pelo JSON do cache
     Telas exibidas pelo player ...... /view/image/{id}, /view/video/{id}, /view/weather,
                                       /view/traffic, /view/message/{id}
     Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
@@ -43,6 +46,7 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -58,7 +62,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 load_dotenv()
 
@@ -574,13 +578,16 @@ def _inmet_alerts(ibge: str) -> list[dict]:
     return out
 
 
-@app.get("/api/weather")
-def api_weather():
+def get_weather(force: bool = False) -> dict:
+    """Previsão + alertas, com cache de 10 min. Em falha de rede devolve a última previsão boa.
+
+    `force=True` ignora o cache (usado pela atualização em segundo plano).
+    """
     s = load_settings()
     ibge = str(s.get("ibge_code") or "").strip()
     key = (s["weather_lat"], s["weather_lon"], ibge, s["weather_city"])
     now = time.time()
-    if _wx_cache["data"] and _wx_cache["key"] == key and now - _wx_cache["t"] < WX_TTL:
+    if not force and _wx_cache["data"] and _wx_cache["key"] == key and now - _wx_cache["t"] < WX_TTL:
         return _wx_cache["data"]
     try:
         w = _build_weather(_fetch_forecast(s["weather_lat"], s["weather_lon"]), s["weather_city"])
@@ -593,8 +600,28 @@ def api_weather():
     except Exception:
         alerts = []
     w["alerts"] = sorted(alerts, key=lambda a: SEV_ORDER.get(a["severity"], 9))
+    w["updated_at"] = datetime.now().strftime("%H:%M")
     _wx_cache.update(t=now, key=key, data=w)
     return w
+
+
+@app.get("/api/weather")
+def api_weather():
+    return get_weather()
+
+
+# Mantém o cache sempre "quente": a cada 9 min (antes de vencer o TTL de 10) busca a
+# previsão em segundo plano. Assim a tela de clima nunca espera a internet ao abrir.
+WX_REFRESH_EVERY = 540
+
+
+def _weather_refresher():
+    while True:
+        try:
+            get_weather(force=True)
+        except Exception as e:
+            print(f"[clima] falha ao atualizar a previsão em segundo plano: {e}")
+        time.sleep(WX_REFRESH_EVERY)
 
 
 # ─── Telas exibidas pelo player (e pela pré-visualização do painel) ──────────
@@ -638,9 +665,23 @@ def view_video(item_id: str):
   style="width:100%;height:100%;object-fit:contain;background:#000"></video>""")
 
 
+WX_DATA_MARK = "/*__WX_DATA__*/null"
+
+
 @app.get("/view/weather")
 def view_weather():
-    return FileResponse(str(STATIC_DIR / "weather.html"))
+    """Tela de clima já com a previsão embutida, para abrir pronta (sem "Carregando…").
+
+    O HTML tem `let W = /*__WX_DATA__*/null;` e a marca é trocada pelo JSON do cache.
+    Se ainda não houver previsão, a página recebe null e busca /api/weather sozinha.
+    `<\\/` evita que um texto com "</script>" nos dados feche a tag antes da hora.
+    """
+    page = (STATIC_DIR / "weather.html").read_text(encoding="utf-8")
+    try:
+        data = json.dumps(get_weather(), ensure_ascii=False).replace("</", "<\\/")
+    except HTTPException:
+        data = "null"
+    return HTMLResponse(page.replace(WX_DATA_MARK, data, 1), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/view/traffic")
@@ -717,6 +758,7 @@ def admin():
 @app.on_event("startup")
 def startup():
     init_db()
+    threading.Thread(target=_weather_refresher, name="clima", daemon=True).start()
     print(f"\n✅ Alava Vision {__version__} rodando em http://0.0.0.0:{PORT}/")
     print(f"   Login: {ADMIN_USER} / {ADMIN_PASSWORD}\n")
 
