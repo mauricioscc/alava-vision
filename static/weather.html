@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Tela de clima (static/weather.html) · versão 0.3.0
+  Alava Vision — Tela de clima (static/weather.html) · versão 0.5.0
 
   COMO ABRIR / TESTAR (servidor rodando na porta 8080)
     http://localhost:8080/view/weather                         previsão real
@@ -11,7 +11,8 @@
         alert = yellow | orange | red (tag de teste no canto inferior direito)
 
   COMO REVERTER
-    Copie backup_v0.2.0_20261117/static/weather.html por cima deste arquivo.
+    Com Git:  git checkout <commit> -- static/weather.html   (commits: git log --oneline)
+    Para a 0.2.0: copie backup_v0.2.0_20261117/static/weather.html por cima deste arquivo.
 
   MAPA DO CÓDIGO
     Layout / CSS ................ .top (cidade, à direita), .main (.clock, .now), .bottom (.week, .alerts)
@@ -22,8 +23,8 @@
     Dados / modo demonstração ... load(), fakeData(), applyDemo()
     Preenchimento da tela ....... render()
     Céu animado (canvas) ........ Sky (PAL, TONES, CONF, build(), frame(), drawSun/Moon/Clouds/Rain/Snow/Fog/Lightning)
-    Marca d'água ................ não fica aqui: o player injeta em todas as telas (player.py → WATERMARK_JS).
-                                  O canto superior esquerdo fica livre para ela.
+    Logo Alava .................. .brand (CSS) e <img class="brand"> logo após o canvas.
+                                  Só as telas de clima e trânsito têm o logo; os sites aparecem sem ele.
 -->
 <html lang="pt-BR">
 <head>
@@ -41,7 +42,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0b1530;color:#fff;
 .ui{position:fixed;inset:0;display:grid;grid-template-rows:auto 1fr auto;gap:2.4vh;
   padding:4vh 3.4vw;text-shadow:0 2px 14px rgba(0,0,0,.35)}
 
-/* Canto superior esquerdo reservado para a marca d'água: cidade fica à direita */
+/* Logo Alava no canto superior esquerdo: discreto (4,2% da altura da tela, opacidade .8),
+   com contorno escuro fino + halo suave para continuar legível em céu claro ou escuro. */
+.brand{position:fixed;top:max(2.2vh,14px);left:max(1.8vw,16px);height:clamp(26px,4.2vh,72px);width:auto;
+  opacity:.8;z-index:5;pointer-events:none;user-select:none;
+  filter:drop-shadow(0 1px 2px rgba(0,0,0,.55)) drop-shadow(0 0 10px rgba(0,0,0,.35))}
+
+/* Canto superior esquerdo reservado para o logo: cidade fica à direita */
 .top{display:flex;flex-direction:column;align-items:flex-end;gap:.5vh;text-align:right}
 .city{font-size:2.5vh;font-weight:600;letter-spacing:.28em;text-transform:uppercase}
 .upd{font-size:1.7vh;opacity:.72}
@@ -110,6 +117,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0b1530;color:#fff;
 <body>
 <canvas id="sky"></canvas>
 <div class="shade"></div>
+<img class="brand" src="/assets/watermark.png" alt="Alava">
 
 <div class="ui">
   <div class="top">
