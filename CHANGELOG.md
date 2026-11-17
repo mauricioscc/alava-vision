@@ -7,6 +7,20 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.4.0] — 2026-11-17
+> Projeto agora versionado com Git. Ponto de restauração da 0.3.0: commit `acb3fda` na branch `main`.
+
+#### Adicionado
+- **Player sempre no monitor da TV** (`monitors.py`): o player lê os monitores do Windows e abre o Chrome em tela cheia no monitor 2 (padrão), qualquer que seja a resolução, a escala de DPI ou a posição das telas.
+  - Numeração: 1 = principal; 2, 3… = demais, da esquerda para a direita. `python player.py --list-monitors` mostra a lista.
+  - Configurável por `--monitor N` ou `PLAYER_MONITOR` no `.env`. `--monitor 0` mantém a posição manual antiga (`--screen-x/--screen-y`).
+  - A cada 10 s o player confere a janela: se ela saiu da TV, volta para lá. Se a TV for desligada ou desconectada, a janela é minimizada para não cobrir o monitor principal e volta sozinha quando a TV reaparece.
+- `iniciar_alava_vision.bat`: sobe o servidor, espera ele responder e abre o player na TV.
+- Repositório Git com `.gitignore` (fora: `.env`, `data/`, backups, caches e perfis dos projetos antigos) e `.env.example`.
+
+#### Alterado
+- `iniciar_player.bat` não usa mais `--screen-x 1920` fixo, que só funcionava por coincidência em algumas disposições de tela.
+
 ### [0.3.0] — 2026-11-17
 > Backup da versão anterior: `backup_v0.2.0_20261117/` (código + banco). Como reverter: ver README.
 

@@ -1,24 +1,39 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.3.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.4.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
-```bash
-pip install -r requirements.txt
+Primeira vez: `pip install -r requirements.txt` e copie `.env.example` para `.env` (defina a senha).
 
+**Na máquina da TV (um clique):** `iniciar_alava_vision.bat` sobe o servidor e abre o player em tela cheia no
+monitor da TV. Para iniciar junto com o Windows, coloque um atalho desse arquivo em `shell:startup`
+(Win+R → `shell:startup`).
+
+Manualmente:
+
+```bash
 # 1. Servidor + painel  →  http://localhost:8080/   (senha = ADMIN_PASSWORD do .env)
 python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
 
-# 2. Player (na máquina ligada à TV)
-python player.py --screen-x 1920        # TV à direita de um monitor de 1920px; use 0 se só houver a TV
+# 2. Player: abre sempre no monitor 2 (onde a TV fica ligada pelo HDMI)
+python player.py
+python player.py --list-monitors     # confere a numeração dos monitores
 ```
 
-Atalhos no Windows: `iniciar_servidor.bat` e `iniciar_player.bat`.
+### Monitor da TV
 
-Opções úteis do player: `--port 8080`, `--width 1920 --height 1080`, `--channel msedge`,
-`--no-watermark`, `--wm-opacity 0.7`, `--logo assets/outro.png`.
+O player pergunta ao Windows onde está cada tela e abre o Chrome em tela cheia no **monitor 2**
+(1 = principal; 2, 3… = os demais, da esquerda para a direita). Não importa a resolução, a escala
+nem a posição das telas nas configurações do Windows.
+
+- Para outro monitor: `PLAYER_MONITOR=3` no `.env` ou `python player.py --monitor 3`.
+- A cada 10 s ele confere a janela. Se ela saiu da TV, volta para lá.
+- TV desligada ou desconectada: a janela é minimizada para não cobrir o monitor principal e volta sozinha quando a TV reaparece.
+
+Outras opções do player: `--port 8080`, `--channel msedge`, `--no-watermark`, `--wm-opacity 0.7`,
+`--logo assets/outro.png`, `--monitor 0 --screen-x X --screen-y Y` (posição manual).
 
 ## O que o painel faz
 
@@ -43,11 +58,14 @@ Para conferir a decisão atual: `http://localhost:8080/api/player/state`.
 Alava Vision/
 ├── server.py              Backend FastAPI + SQLite (API, programação, clima, telas do player)
 ├── player.py              Chrome em kiosk via CDP; segue /api/player/state; injeta a marca d'água
+├── monitors.py            Detecta os monitores do Windows e mantém a janela do player na TV
+├── iniciar_alava_vision.bat  Servidor + player com um clique
 ├── static/index.html      Painel administrativo
 ├── static/weather.html    Tela de clima (relógio, 7 dias, céu animado, alertas INMET)
 ├── assets/                Logos da Alava; watermark.png é a versão usada na TV
 ├── data/                  Banco (database.db), uploads e perfil do navegador do player
-├── .env                   Senha, porta, localização, código IBGE
+├── .env                   Senha, porta, localização, código IBGE, monitor da TV (fora do Git)
+├── .env.example           Modelo do .env
 ├── backup_v0.2.0_20261117/  Cópia da versão anterior (código + banco)
 └── Old/                   Projetos originais (AlavaVision em Qt e kiosk-player)
 ```
@@ -55,7 +73,19 @@ Alava Vision/
 Cada arquivo de código começa com um bloco de comentários com a versão, como rodar, como reverter e um mapa
 de onde fica cada funcionalidade.
 
-## Como reverter para a 0.2.0
+## Versões e como reverter
+
+O projeto usa Git a partir da 0.3.0. `main` é a versão estável; mudanças novas são feitas numa branch.
+
+```bash
+git log --oneline              # lista as versões
+git checkout main              # volta para a versão estável
+git checkout <commit> -- player.py   # restaura só um arquivo de uma versão anterior
+```
+
+Ficam fora do Git: `.env` (senha), `data/` (banco, uploads e login do Chrome da TV) e as pastas de backup.
+
+### Voltar para a 0.2.0 (anterior ao Git)
 
 1. Pare o servidor e o player.
 2. Copie `server.py`, `player.py` e `static/` de `backup_v0.2.0_20261117/` por cima dos atuais.

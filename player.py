@@ -1,24 +1,37 @@
 """
-Alava Vision — Player (player.py) · versão 0.3.0
+Alava Vision — Player (player.py) · versão 0.4.0
 
-Abre o Chrome em tela cheia no monitor da TV e exibe o conteúdo que o servidor
-manda exibir AGORA, respeitando a programação (timeline) do painel.
+Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
+o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
 
 COMO RODAR (com o servidor já rodando na porta 8080)
-    python player.py --screen-x 1920                 # TV à direita de um monitor 1920px
-    python player.py --screen-x 0                    # só a TV conectada
-    python player.py --screen-x 1920 --port 8080 --width 1920 --height 1080
-    python player.py --no-watermark                  # desliga a marca d'água
-    python player.py --wm-opacity 0.7                # transparência da marca (0.65 a 0.85 recomendado)
-    python player.py --logo "assets/outro_logo.png"  # usa outro arquivo de logo
-    Fechar: Alt+F4 na TV ou Ctrl+C no terminal.
+    python player.py                          # TV no 2º monitor (padrão)
+    python player.py --list-monitors          # mostra a numeração dos monitores e sai
+    python player.py --monitor 3              # TV em outro monitor
+    python player.py --monitor 1              # testar com uma tela só (ocupa o monitor principal!)
+    python player.py --monitor 0 --screen-x 1366 --screen-y -371   # posição manual (modo antigo)
+    python player.py --no-watermark           # desliga a marca d'água
+    python player.py --wm-opacity 0.7         # transparência da marca (0.65 a 0.85 recomendado)
+    Monitor padrão também pode ser definido no .env: PLAYER_MONITOR=2
+    Fechar: Ctrl+C no terminal (ou Alt+F4 com o foco na TV).
 
-COMO REVERTER PARA A VERSÃO ANTERIOR (0.2.0)
-    Copie backup_v0.2.0_20261117/player.py por cima deste arquivo.
+    Servidor + player juntos: iniciar_alava_vision.bat
+
+COMPORTAMENTO DO MONITOR
+    • Ao abrir, o Chrome é posicionado no monitor escolhido e entra em tela cheia (kiosk).
+    • A cada 10 s o player confere: se a janela saiu da TV, ela é recolocada.
+    • TV desligada/desconectada (monitor sumiu): a janela é minimizada para não cobrir
+      o monitor principal. Quando a TV volta, o player a recoloca automaticamente.
+    Detalhes em monitors.py.
+
+COMO REVERTER
+    Com Git:  git checkout main   (volta tudo para a versão 0.3.0)
+    Sem Git:  backup_v0.2.0_20261117/player.py (versão 0.2.0)
 
 MAPA DO CÓDIGO
     Caminhos dos navegadores ........ BROWSER_PATHS
     Abrir Chrome com porta CDP ...... find_browser(), launch_browser(), cdp_up()
+    Monitor da TV ................... target_monitor(), browser_pid(), MonitorGuard  (+ monitors.py)
     Consulta ao servidor ............ fetch_state()  → GET /api/player/state
     Janela de horário de mensagens .. time_in_window()
     URL de cada tipo de item ........ item_url()
@@ -36,9 +49,14 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "0.3.0"
+from dotenv import load_dotenv
+
+import monitors
+
+__version__ = "0.4.0"
 
 BASE = Path(__file__).parent
+load_dotenv(BASE / ".env")
 
 IDLE_HTML = """<body style="margin:0;background:#0a0a14;color:#4a5568;font-family:system-ui;
 display:flex;align-items:center;justify-content:center;height:100vh;font-size:3vw;text-align:center">
@@ -86,18 +104,30 @@ def find_browser(args) -> str:
     raise RuntimeError("Chrome não encontrado. Use --browser-path ou --channel msedge.")
 
 
+def target_monitor(args) -> dict | None:
+    """Monitor da TV (None em modo manual, fora do Windows ou se ele não estiver conectado)."""
+    if args.monitor <= 0 or not monitors.IS_WINDOWS:
+        return None
+    return monitors.pick_monitor(args.monitor)
+
+
 def launch_browser(args) -> subprocess.Popen | None:
     if cdp_up(args.cdp_port):
         log("Reaproveitando navegador já aberto na porta", args.cdp_port)
         return None
     exe = find_browser(args)
+    # Abre já sobre o monitor da TV; o modo kiosk ocupa a tela em que a janela nasce.
+    # Se a posição não bater (escala de DPI, TV desligada), o MonitorGuard corrige em seguida.
+    mon = target_monitor(args)
+    x, y, w, h = ((mon["left"], mon["top"], mon["width"], mon["height"]) if mon
+                  else (args.screen_x, args.screen_y, args.width, args.height))
     cmd = [
         exe,
         f"--remote-debugging-port={args.cdp_port}",
         f"--user-data-dir={Path(args.profile).resolve()}",
         "--kiosk",
-        f"--window-position={args.screen_x},{args.screen_y}",
-        f"--window-size={args.width},{args.height}",
+        f"--window-position={x},{y}",
+        f"--window-size={w},{h}",
         "--no-first-run", "--no-default-browser-check", "--noerrdialogs",
         "--disable-infobars", "--disable-session-crashed-bubble",
         "--disable-features=Translate",
@@ -188,6 +218,55 @@ def watermark_script(logo: Path, opacity: float) -> str | None:
             .replace("__OPACITY__", str(max(0.0, min(1.0, opacity)))))
 
 
+# ─── Monitor da TV ────────────────────────────────────────────────────────────
+
+def browser_pid(browser, proc: subprocess.Popen | None) -> int | None:
+    """PID do processo principal do Chrome (dono da janela), pedido ao próprio Chrome."""
+    try:
+        info = browser.new_browser_cdp_session().send("SystemInfo.getProcessInfo")
+        return next(p["id"] for p in info["processInfo"] if p["type"] == "browser")
+    except Exception:
+        return proc.pid if proc else None
+
+
+class MonitorGuard:
+    """Confere de tempos em tempos se a janela do player está no monitor da TV."""
+
+    def __init__(self, args, pid: int | None):
+        self.number, self.pid = args.monitor, pid
+        self.enabled = args.monitor > 0 and monitors.IS_WINDOWS and pid is not None
+        self.last_status, self.last_check = None, 0.0
+
+    def check(self, force: bool = False) -> None:
+        if not self.enabled or (not force and time.time() - self.last_check < 10):
+            return
+        self.last_check = time.time()
+        status = monitors.ensure_on_monitor(self.pid, self.number)
+        if status != self.last_status or status == "moved":
+            mon = monitors.pick_monitor(self.number)
+            if status == "ok":
+                log("Player no", monitors.describe(mon))
+            elif status == "moved":
+                log("Janela posicionada no", monitors.describe(mon))
+            elif status == "no-monitor":
+                log(f"Monitor {self.number} não encontrado (TV desligada ou desconectada?). "
+                    "Player minimizado, aguardando a TV voltar.")
+        self.last_status = status
+
+    def wait_window(self, timeout: float = 15) -> None:
+        """Logo após abrir o Chrome a janela demora um pouco para existir."""
+        end = time.time() + timeout
+        while self.enabled and time.time() < end:
+            self.check(force=True)
+            if self.last_status not in (None, "no-window"):
+                time.sleep(1.5)
+                self.check(force=True)  # o kiosk às vezes se reposiciona ao terminar de abrir
+                return
+            time.sleep(0.5)
+        if self.enabled:
+            log("Não encontrei a janela do Chrome para posicionar no monitor", self.number)
+
+
 # ─── Loop de exibição ─────────────────────────────────────────────────────────
 
 def run(args):
@@ -206,6 +285,9 @@ def run(args):
             page.on("dialog", lambda d: d.dismiss())
             if wm_js:
                 page.add_init_script(wm_js)
+
+            guard = MonitorGuard(args, browser_pid(browser, proc))
+            guard.wait_window()
 
             state: dict = {"items": []}
             idx = 0
@@ -226,7 +308,9 @@ def run(args):
                         page.evaluate(wm_js)
                     current_url = None
                     idx = 0
-                    time.sleep(5)
+                    for _ in range(5):
+                        time.sleep(1)
+                        guard.check()
                     continue
 
                 idx %= len(items)
@@ -257,6 +341,7 @@ def run(args):
                 last_check = time.time()
                 while time.time() < deadline:
                     time.sleep(1)
+                    guard.check()
                     if time.time() - last_check < 5:
                         continue
                     last_check = time.time()
@@ -279,10 +364,13 @@ def run(args):
 
 def main():
     ap = argparse.ArgumentParser(description=f"Alava Vision Player {__version__}")
-    ap.add_argument("--screen-x", type=int, default=0, help="posição X da TV (largura do monitor principal)")
-    ap.add_argument("--screen-y", type=int, default=0)
-    ap.add_argument("--width", type=int, default=1920)
-    ap.add_argument("--height", type=int, default=1080)
+    ap.add_argument("--monitor", type=int, default=int(os.getenv("PLAYER_MONITOR", "2")),
+                    help="monitor da TV: 1 = principal, 2 = segundo (padrão), 0 = posição manual")
+    ap.add_argument("--list-monitors", action="store_true", help="lista os monitores e sai")
+    ap.add_argument("--screen-x", type=int, default=0, help="só com --monitor 0: posição X da janela")
+    ap.add_argument("--screen-y", type=int, default=0, help="só com --monitor 0: posição Y da janela")
+    ap.add_argument("--width", type=int, default=1920, help="só com --monitor 0")
+    ap.add_argument("--height", type=int, default=1080, help="só com --monitor 0")
     ap.add_argument("--port", type=int, default=8080, help="porta do servidor Alava Vision")
     ap.add_argument("--channel", default="chrome", help="chrome | msedge")
     ap.add_argument("--browser-path", default="")
@@ -292,6 +380,16 @@ def main():
     ap.add_argument("--wm-opacity", type=float, default=0.8, help="opacidade da marca d'água (0 a 1)")
     ap.add_argument("--no-watermark", action="store_true", help="não exibir marca d'água")
     args = ap.parse_args()
+
+    if args.list_monitors:
+        for m in monitors.list_monitors() or []:
+            print(monitors.describe(m))
+        return
+
+    mon = target_monitor(args)
+    if args.monitor > 0 and monitors.IS_WINDOWS:
+        log(f"Alava Vision Player {__version__} — alvo:",
+            monitors.describe(mon) if mon else f"monitor {args.monitor} (não conectado agora)")
 
     while True:
         try:

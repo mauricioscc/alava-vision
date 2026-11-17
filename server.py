@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.3.0
+Alava Vision — Servidor (server.py) · versão 0.4.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -10,7 +10,9 @@ COMO RODAR
         http://localhost:8080/api/schedule      → blocos salvos na timeline
         http://localhost:8080/api/weather       → dados de clima usados na tela de previsão
 
-COMO REVERTER PARA A VERSÃO ANTERIOR (0.2.0)
+COMO REVERTER
+    Com Git (a partir da 0.3.0):  git log --oneline  e  git checkout <commit> -- server.py
+    Para a 0.2.0 (antes do Git):
     1. Pare o servidor e o player (Ctrl+C).
     2. Copie os arquivos de backup_v0.2.0_20261117/ por cima dos atuais
        (server.py, player.py, static/index.html, static/weather.html).
@@ -52,7 +54,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 load_dotenv()
 
