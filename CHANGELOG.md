@@ -7,6 +7,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.8.1] — 2026-11-18
+#### Corrigido
+- **Tela de clima mostrava garoa com sol forte.** O modelo padrão da Open-Meteo às vezes devolve garoa (códigos 51/53) com 0,1 mm, e a TV exibia "Garoa fraca" com animação de chuva. Agora, garoa abaixo de 0,2 mm aparece como "Parcialmente nublado". Chuva de verdade, pancadas e trovoadas continuam iguais, assim como a previsão de 7 dias e os alertas do INMET. O código original do modelo fica em `current.code_raw` no `/api/weather`, para conferência.
+
+#### Adicionado (temporário)
+- **Comparação de modelos de clima** em `data/wx_compare.csv`: a cada 9 min grava o "agora" do modelo padrão (`best_match`) e do ECMWF (`ecmwf_ifs025`), com temperatura, condição, chuva, nuvens e umidade. Abre direto no Excel. Serve para decidir, em 02/12/2026, se vale trocar de modelo. `WX_COMPARE=0` no `.env` desliga.
+
 ### [0.8.0] — 2026-11-18
 #### Adicionado
 - **Aviso instantâneo para o player (WebSocket).** O player mantém uma conexão aberta em `/ws/player` e o servidor manda o estado novo assim que alguém salva algo no painel ou a programação troca de bloco. Antes o player perguntava a cada 5 s, e uma mudança no painel demorava até 5 s para chegar à TV; agora chega em menos de 0,1 s.
