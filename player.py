@@ -1,10 +1,10 @@
 """
-Alava Vision — Player (player.py) · versão 0.5.0
+Alava Vision — Player (player.py) · versão 0.6.4
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
 
-COMO RODAR (com o servidor já rodando na porta 8080)
+COMO RODAR (com o servidor já rodando; porta = PORT do .env, padrão 8080)
     python player.py                          # TV no 2º monitor (padrão)
     python player.py --list-monitors          # mostra a numeração dos monitores e sai
     python player.py --monitor 3              # TV em outro monitor
@@ -53,7 +53,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.5.0"
+__version__ = "0.6.4"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -310,7 +310,8 @@ def main():
     ap.add_argument("--screen-y", type=int, default=0, help="só com --monitor 0: posição Y da janela")
     ap.add_argument("--width", type=int, default=1920, help="só com --monitor 0")
     ap.add_argument("--height", type=int, default=1080, help="só com --monitor 0")
-    ap.add_argument("--port", type=int, default=8080, help="porta do servidor Alava Vision")
+    ap.add_argument("--port", type=int, default=int(os.getenv("PORT", "8080")),
+                    help="porta do servidor Alava Vision (padrão: PORT do .env ou 8080)")
     ap.add_argument("--channel", default="chrome", help="chrome | msedge")
     ap.add_argument("--browser-path", default="")
     ap.add_argument("--cdp-port", type=int, default=9222)
