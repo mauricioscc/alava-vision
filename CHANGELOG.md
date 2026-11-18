@@ -7,6 +7,19 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.9.0] — 2026-11-18
+#### Adicionado
+- **Widget de Contador Regressivo** (⏳ Contador): título, data e hora do evento, cores do fundo e do texto, segundos opcionais e texto exibido quando a hora chega (padrão "Chegou a hora!"). Mostra dias só enquanto faltar 1 dia ou mais. Com "Tirar da TV depois que a hora chegar", o player deixa de exibir o item sozinho. Tela em `/view/countdown/{id}`.
+- **Widget de HTML local** (📄 HTML local): envio de um `.html` (página única) ou de um `.zip` com a página e seus arquivos. Cada envio ganha a pasta `data/html/<id>/`, servida em `/html/...`, então links relativos (CSS, imagens, scripts) funcionam. No `.zip`, a página inicial é o `index.html` (na raiz ou dentro de uma única pasta). O servidor recusa `.zip` inválido, sem página `.html`, com caminhos que saiam da pasta (`../`), com mais de 2.000 arquivos ou com mais de 300 MB descompactado.
+- **Vídeo: opção "Repetir"** no cadastro e na edição. Ligada (padrão), o vídeo recomeça até completar a duração do item, como antes. Desligada, ele toca uma vez e a TV passa para o próximo item quando o vídeo acaba, e a duração vira o tempo máximo. O painel mostra o tempo do vídeo e o atalho "Usar N s como duração". Itens de vídeo que já existiam continuam repetindo.
+
+#### Corrigido
+- A pré-visualização de vídeo no painel não repetia: um vídeo de 10 s num item de 20 s parava e ficava com a tela congelada. Agora a prévia segue a opção "Repetir", igual à TV.
+- No cadastro de item, enviar um arquivo e depois trocar o tipo (ex.: vídeo → HTML) fazia o item novo apontar para o arquivo errado. Agora o arquivo é descartado ao trocar de tipo.
+
+#### Segurança
+- A prévia de páginas HTML no painel roda isolada (sem `allow-same-origin`), para que um script da página enviada não consiga ler o login do painel salvo no navegador.
+
 ### [0.8.1] — 2026-11-18
 #### Corrigido
 - **Tela de clima mostrava garoa com sol forte.** O modelo padrão da Open-Meteo às vezes devolve garoa (códigos 51/53) com 0,1 mm, e a TV exibia "Garoa fraca" com animação de chuva. Agora, garoa abaixo de 0,2 mm aparece como "Parcialmente nublado". Chuva de verdade, pancadas e trovoadas continuam iguais, assim como a previsão de 7 dias e os alertas do INMET. O código original do modelo fica em `current.code_raw` no `/api/weather`, para conferência.
@@ -146,8 +159,6 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 ### Planejado
 - **Vários players na rede**: cadastro de cada TV no painel, com playlist e programação próprias
 - **Usuários e permissões**: hoje existe uma senha única para o painel
-- **Widget de HTML local**: exibir páginas HTML salvas no projeto
-- **Widget de Contador Regressivo**
 - **Métricas em tempo real**: o que cada TV está exibindo e se está online
 - **Conteúdo local fora do Chrome** (avaliar): o player usa só o Chrome; a parte em Qt prevista para conteúdo local ainda não existe
 

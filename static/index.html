@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.6.3
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.9.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,6 +9,7 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.8.1 (antes dos widgets de HTML e contador): git checkout 3ac5a57 -- static/index.html
     Para a 0.2.0 (antes do Git): copie backup_v0.2.0_20261117/static/index.html por cima deste arquivo.
 
   MAPA DO CÓDIGO
@@ -21,6 +22,10 @@
       reordenar (arrastar) ......... setupDrag()
       miniaturas ................... thumbHtml()
     Cadastro de item ............... #modal, openAddModal(), openEdit(), saveItem(), uploadFile()
+      tipos (ícone, nome, cor) ..... TYPE_ICONS, TYPE_NAMES, TYPE_COLORS, ALL_TYPES; CSS .badge-<tipo>
+      vídeo: repetir ou não ........ #f-vid-loop, updateVideoHint(), useVideoLength()  → config.loop
+      HTML local (.html/.zip) ...... #cfg-html, uploadFile(f,'html') → POST /api/upload-html
+      contador regressivo .......... #cfg-countdown (#f-cd-*), fmtDateTime()
     Pré-visualização ............... #pv-overlay, .pv-screen, .pv-media, openPreview(), fitFrame()
     Aba Programação (timeline) ..... #tab-schedule, objeto TL, loadTimeline(), renderTimeline()
       biblioteca arrastável ........ renderLibrary(), .chip
@@ -144,6 +149,9 @@ button,input,select,textarea{font-family:inherit}
 .badge-weather{background:color-mix(in srgb,#06b6d4 15%,transparent);color:#06b6d4}
 .badge-traffic{background:color-mix(in srgb,#f59e0b 15%,transparent);color:#d97706}
 .badge-message{background:color-mix(in srgb,#22c55e 15%,transparent);color:#16a34a}
+.badge-html{background:color-mix(in srgb,#ef4444 15%,transparent);color:#dc2626}
+.badge-countdown{background:color-mix(in srgb,#14b8a6 15%,transparent);color:#0d9488}
+.check-line{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px}
 .pl-duration{font-size:13px;color:var(--soft);white-space:nowrap;font-variant-numeric:tabular-nums}
 .toggle{position:relative;display:inline-block;width:36px;height:20px}
 .toggle input{position:absolute;opacity:0;width:0;height:0}
@@ -194,7 +202,7 @@ button,input,select,textarea{font-family:inherit}
 /* Formulários */
 .form-group{display:flex;flex-direction:column;gap:6px;min-width:0}
 label{font-size:13px;font-weight:500;color:var(--soft)}
-input[type=text],input[type=number],input[type=url],input[type=password],input[type=time],input[type=color],select,textarea{
+input[type=text],input[type=number],input[type=url],input[type=password],input[type=time],input[type=datetime-local],input[type=color],select,textarea{
   width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
   padding:9px 12px;border-radius:8px;font-size:14px;transition:.15s}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
@@ -472,6 +480,8 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <button class="type-tab" data-type="weather" onclick="setType('weather')">🌤 Clima</button>
           <button class="type-tab" data-type="traffic" onclick="setType('traffic')">🚗 Trânsito</button>
           <button class="type-tab" data-type="message" onclick="setType('message')">💬 Mensagem</button>
+          <button class="type-tab" data-type="countdown" onclick="setType('countdown')">⏳ Contador</button>
+          <button class="type-tab" data-type="html" onclick="setType('html')">📄 HTML local</button>
         </div>
       </div>
 
@@ -502,6 +512,30 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <div id="vid-drop-text">📁 Clique ou arraste o vídeo aqui<br><span class="hint">MP4, WebM, MOV</span></div>
         </label>
         <video id="vid-preview" class="upload-preview" controls muted playsinline hidden></video>
+        <label class="check-line" style="margin-top:10px"><input type="checkbox" id="f-vid-loop" checked onchange="updateVideoHint()"> 🔁 Repetir o vídeo até completar a duração</label>
+        <p class="hint" id="vid-hint"></p>
+      </div>
+
+      <div id="cfg-html" hidden class="form-group">
+        <label>Página HTML</label>
+        <label class="upload-area" id="html-drop" ondragover="event.preventDefault()" ondrop="onDrop(event,'html')">
+          <input type="file" id="f-html-file" accept=".html,.htm,.zip" onchange="onFileChange(event,'html')">
+          <div id="html-drop-text">📁 Clique ou arraste a página aqui<br><span class="hint">.html (página única) ou .zip (página com CSS, imagens e scripts)</span></div>
+        </label>
+        <p class="hint">No .zip, a página inicial é o <b>index.html</b>. Links relativos (ex.: <code>css/estilo.css</code>) funcionam normalmente.</p>
+      </div>
+
+      <div id="cfg-countdown" hidden class="form-group" style="gap:12px">
+        <div class="form-group"><label for="f-cd-title">Título</label><input type="text" id="f-cd-title" placeholder="Faltam para a confraternização"></div>
+        <div class="form-group"><label for="f-cd-target">Data e hora do evento</label><input type="datetime-local" id="f-cd-target"></div>
+        <div class="form-group"><label for="f-cd-end">Texto quando chegar a hora</label><input type="text" id="f-cd-end" placeholder="Chegou a hora!"></div>
+        <div class="row2">
+          <div class="form-group"><label for="f-cd-bg">Cor do fundo</label><input type="color" id="f-cd-bg" value="#0a0a1a"></div>
+          <div class="form-group"><label for="f-cd-fg">Cor do texto</label><input type="color" id="f-cd-fg" value="#ffffff"></div>
+        </div>
+        <label class="check-line"><input type="checkbox" id="f-cd-sec" checked> Mostrar segundos</label>
+        <label class="check-line"><input type="checkbox" id="f-cd-hide"> Tirar da TV depois que a hora chegar</label>
+        <p class="hint">Desmarcado, a TV continua mostrando o texto final até você desativar o item.</p>
       </div>
 
       <div id="cfg-weather" hidden>
@@ -597,9 +631,10 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const uid = () => Math.random().toString(16).slice(2, 14).padEnd(12, '0');
-const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬'};
-const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem'};
-const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e'};
+const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬',countdown:'⏳',html:'📄'};
+const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem',countdown:'Contador',html:'HTML local'};
+const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e',countdown:'#14b8a6',html:'#ef4444'};
+const ALL_TYPES = Object.keys(TYPE_NAMES);
 const PL_COLOR = '#6366f1';
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch(e) { return null; } },
@@ -750,7 +785,10 @@ function itemMeta(item) {
   const c = item.config || {};
   if (item.type === 'url') return `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc((c.url || '').slice(0, 70))}</a>`;
   if (item.type === 'message') return esc((c.text || '').slice(0, 60)) + (c.time_start ? ` · ${esc(c.time_start)}–${esc(c.time_end)}` : '');
-  if (item.type === 'image' || item.type === 'video') return esc((c.url || '').split('/').pop());
+  if (item.type === 'image') return esc((c.url || '').split('/').pop());
+  if (item.type === 'video') return esc((c.url || '').split('/').pop()) + (c.loop === false ? ' · toca uma vez' : ' · repete');
+  if (item.type === 'html') return esc(c.file || (c.url || '').split('/').pop());
+  if (item.type === 'countdown') return esc(c.title || '') + (c.target ? ` · até ${esc(fmtDateTime(c.target))}` : '');
   return '';
 }
 
@@ -829,15 +867,46 @@ async function deletePlaylist() {
 }
 
 // ─── Modal de item ────────────────────────────────────────────────────────────
+// "2026-12-24T18:00" → "24/12/2026 18:00"
+function fmtDateTime(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso || '');
+  return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}` : iso;
+}
+
+const VID_DROP_TEXT = '📁 Clique ou arraste o vídeo aqui<br><span class="hint">MP4, WebM, MOV</span>';
+const HTML_DROP_TEXT = '📁 Clique ou arraste a página aqui<br><span class="hint">.html (página única) ou .zip (página com CSS, imagens e scripts)</span>';
+
 function resetItemForm() {
-  ['f-name', 'f-url', 'f-msg-text', 'f-msg-start', 'f-msg-end'].forEach(id => $(id).value = '');
+  ['f-name', 'f-url', 'f-msg-text', 'f-msg-start', 'f-msg-end', 'f-cd-title', 'f-cd-target', 'f-cd-end']
+    .forEach(id => $(id).value = '');
   $('f-duration').value = '30';
   $('f-msg-bg').value = '#0a0a1a'; $('f-msg-fg').value = '#ffffff';
   $('f-msg-size').value = '72'; $('f-msg-clock').checked = true;
+  $('f-cd-bg').value = '#0a0a1a'; $('f-cd-fg').value = '#ffffff';
+  $('f-cd-sec').checked = true; $('f-cd-hide').checked = false;
   $('img-preview').hidden = true; $('img-drop-text').hidden = false;
   const v = $('vid-preview'); v.pause(); v.removeAttribute('src'); v.hidden = true;
-  $('vid-drop-text').innerHTML = '📁 Clique ou arraste o vídeo aqui<br><span class="hint">MP4, WebM, MOV</span>';
+  $('vid-drop-text').innerHTML = VID_DROP_TEXT;
+  $('f-vid-loop').checked = true; updateVideoHint();
+  $('html-drop-text').innerHTML = HTML_DROP_TEXT;
 }
+
+// Vídeo: mostra quanto tempo o arquivo tem e o que acontece com a opção "Repetir".
+function videoSeconds() {
+  const d = $('vid-preview').duration;
+  return isFinite(d) && d > 0 ? Math.ceil(d) : null;
+}
+function updateVideoHint() {
+  const secs = videoSeconds(), loop = $('f-vid-loop').checked;
+  const len = secs ? `O vídeo tem ${secs} s. ` : '';
+  $('vid-hint').innerHTML = loop
+    ? len + 'Ele recomeça sempre que acaba, até completar a duração do item.'
+    : len + 'Ele toca uma vez e a TV passa para o próximo item assim que acabar ' +
+      '(a duração do item passa a ser o tempo máximo).' +
+      (secs ? ` <a href="#" onclick="useVideoLength();return false">Usar ${secs} s como duração</a>` : '');
+}
+function useVideoLength() { const s = videoSeconds(); if (s) $('f-duration').value = Math.max(3, s); }
+$('vid-preview').addEventListener('loadedmetadata', updateVideoHint);
 
 function openAddModal() {
   editId = null; pendingFile = null;
@@ -864,7 +933,20 @@ function openEdit(id) {
   const c = item.config || {};
   if (item.type === 'url') $('f-url').value = c.url || '';
   if (item.type === 'image' && c.url) { $('img-preview').src = c.url; $('img-preview').hidden = false; $('img-drop-text').hidden = true; }
-  if (item.type === 'video' && c.url) { $('vid-preview').src = c.url; $('vid-preview').hidden = false; }
+  if (item.type === 'video') {
+    if (c.url) { $('vid-preview').src = c.url; $('vid-preview').hidden = false; }
+    $('f-vid-loop').checked = c.loop !== false; updateVideoHint();
+  }
+  if (item.type === 'html' && c.url) $('html-drop-text').textContent = '✔ ' + (c.file || c.url.split('/').pop()) + ' — clique para trocar';
+  if (item.type === 'countdown') {
+    $('f-cd-title').value = c.title || '';
+    $('f-cd-target').value = c.target || '';
+    $('f-cd-end').value = c.end_text || '';
+    $('f-cd-bg').value = c.bg_color || '#0a0a1a';
+    $('f-cd-fg').value = c.text_color || '#ffffff';
+    $('f-cd-sec').checked = c.show_seconds !== false;
+    $('f-cd-hide').checked = !!c.hide_after;
+  }
   if (item.type === 'message') {
     $('f-msg-text').value = c.text || '';
     $('f-msg-start').value = c.time_start || '';
@@ -880,16 +962,25 @@ function openEdit(id) {
 function closeModal() { $('modal').hidden = true; $('vid-preview').pause(); }
 
 function setType(t) {
+  // Arquivo enviado para outro tipo (ex.: vídeo e depois trocou para HTML) não vale para este.
+  if (pendingFile && pendingFile.type !== t) {
+    pendingFile = null;
+    $('img-preview').hidden = true; $('img-drop-text').hidden = false;
+    const v = $('vid-preview'); v.pause(); v.removeAttribute('src'); v.hidden = true;
+    $('vid-drop-text').innerHTML = VID_DROP_TEXT; updateVideoHint();
+    $('html-drop-text').innerHTML = HTML_DROP_TEXT;
+  }
   currentType = t;
   document.querySelectorAll('.type-tab').forEach(b => b.classList.toggle('active', b.dataset.type === t));
   showCfgPanel(t);
-  const names = {url:'Site', image:'Imagem', video:'Vídeo', weather:'Previsão do Tempo', traffic:'Trânsito', message:'Mensagem'};
+  const names = {url:'Site', image:'Imagem', video:'Vídeo', weather:'Previsão do Tempo', traffic:'Trânsito',
+                 message:'Mensagem', countdown:'Contador regressivo', html:'Página HTML'};
   if (!$('f-name').value || Object.values(names).includes($('f-name').value)) $('f-name').value = names[t];
-  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15}[t] || 30;
+  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30}[t] || 30;
 }
 
 function showCfgPanel(t) {
-  ['url', 'image', 'video', 'weather', 'traffic', 'message'].forEach(x => $(`cfg-${x}`).hidden = x !== t);
+  ALL_TYPES.forEach(x => $(`cfg-${x}`).hidden = x !== t);
 }
 
 function normalizeUrl(u) { u = u.trim(); return u && !/^https?:\/\//i.test(u) ? 'https://' + u : u; }
@@ -909,10 +1000,19 @@ async function saveItem() {
     const url = normalizeUrl($('f-url').value);
     if (!url) { status('Informe a URL', 'err'); return; }
     config = {url};
-  } else if (currentType === 'image' || currentType === 'video') {
-    if (pendingFile) config = {url: pendingFile.url};
-    else if (editId) config = items.find(i => i.id === editId)?.config || {};
+  } else if (currentType === 'image' || currentType === 'video' || currentType === 'html') {
+    if (pendingFile) config = {url: pendingFile.url, ...(pendingFile.file ? {file: pendingFile.file} : {})};
+    else if (editId) config = {...(items.find(i => i.id === editId)?.config || {})};
     else { status('Selecione um arquivo', 'err'); return; }
+    if (currentType === 'video') config.loop = $('f-vid-loop').checked;
+  } else if (currentType === 'countdown') {
+    const target = $('f-cd-target').value;
+    if (!target) { status('Informe a data e a hora do evento', 'err'); return; }
+    config = {
+      title: $('f-cd-title').value.trim(), target, end_text: $('f-cd-end').value.trim(),
+      bg_color: $('f-cd-bg').value, text_color: $('f-cd-fg').value,
+      show_seconds: $('f-cd-sec').checked, hide_after: $('f-cd-hide').checked,
+    };
   } else if (currentType === 'message') {
     config = {
       text: $('f-msg-text').value, time_start: $('f-msg-start').value, time_end: $('f-msg-end').value,
@@ -932,15 +1032,21 @@ function onDrop(e, type) { e.preventDefault(); const f = e.dataTransfer.files[0]
 function onFileChange(e, type) { const f = e.target.files[0]; if (f) uploadFile(f, type); }
 
 async function uploadFile(file, type) {
-  const area = $(type === 'image' ? 'img-drop' : 'vid-drop');
+  const area = $({image: 'img-drop', video: 'vid-drop', html: 'html-drop'}[type]);
   area.classList.add('drag');
   try {
     const fd = new FormData(); fd.append('file', file);
-    const r = await fetch('/api/upload', {method: 'POST', body: fd, headers: authHeader()});
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const r = await fetch(type === 'html' ? '/api/upload-html' : '/api/upload', {method: 'POST', body: fd, headers: authHeader()});
+    if (!r.ok) {
+      let msg = 'HTTP ' + r.status;
+      try { msg = (await r.json()).detail || msg; } catch(e) {}
+      throw new Error(msg);
+    }
     const data = await r.json();
-    pendingFile = {url: data.url, type: data.type};
-    if (type === 'image') {
+    pendingFile = {url: data.url, type: data.type || type, file: type === 'html' ? file.name : undefined};
+    if (type === 'html') {
+      $('html-drop-text').textContent = '✔ ' + file.name + (data.entry && file.name.toLowerCase().endsWith('.zip') ? ` (abre ${data.entry})` : '') + ' — clique para trocar';
+    } else if (type === 'image') {
       $('img-preview').src = data.url; $('img-preview').hidden = false; $('img-drop-text').hidden = true;
     } else {
       $('vid-drop-text').textContent = '✔ ' + file.name + ' — clique para trocar';
@@ -957,6 +1063,7 @@ async function uploadFile(file, type) {
 // transform: scale(), então a prévia mostra o layout exatamente como na tela.
 function previewSrc(item) {
   if (item.type === 'url') return item.config?.url || '';
+  if (item.type === 'html') return item.config?.url || '';   // a própria página enviada (/html/...)
   if (item.type === 'weather' || item.type === 'traffic') return `/view/${item.type}`;
   return `/view/${item.type}/${item.id}`;
 }
@@ -970,14 +1077,20 @@ function openPreview(item) {
     body.innerHTML = `<div class="pv-media"><img id="pv-img" src="${esc(item.config?.url)}" alt=""></div>`;
     $('pv-img').onload = e => note.textContent = `Tamanho original: ${e.target.naturalWidth} × ${e.target.naturalHeight} px.`;
   } else if (item.type === 'video') {
-    body.innerHTML = `<div class="pv-media"><video src="${esc(item.config?.url)}" controls autoplay muted playsinline></video></div>`;
-    note.textContent = 'Começa sem som, como na TV. Use os controles para pausar ou ativar o áudio.';
+    const loop = item.config?.loop !== false;
+    body.innerHTML = `<div class="pv-media"><video src="${esc(item.config?.url)}" controls autoplay muted${loop ? ' loop' : ''} playsinline></video></div>`;
+    note.textContent = 'Começa sem som, como na TV. ' +
+      (loop ? 'Repete sempre que acaba, como na TV. ' : 'Toca uma vez; na TV, ao acabar, passa para o próximo item. ') +
+      'Use os controles para pausar ou ativar o áudio.';
   } else {
     const src = previewSrc(item);
+    // Página HTML enviada: sem allow-same-origin, para que um script dela não leia
+    // o login do painel guardado neste navegador (ela roda no mesmo endereço do servidor).
+    const sandbox = item.type === 'html' ? 'allow-scripts' : 'allow-scripts allow-same-origin';
     body.innerHTML = `<div class="pv-screen"><div class="pv-fallback">Carregando prévia…<br>
       Se esta mensagem continuar visível, o site não permite ser exibido dentro do painel.<br>Na TV ele abre normalmente.</div>
       <iframe src="${esc(src)}" title="Prévia"
-      sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe></div>`;
+      sandbox="${sandbox}" referrerpolicy="no-referrer"></iframe></div>`;
     note.innerHTML = item.type === 'url'
       ? `Prévia em escala de uma tela 1920×1080. Se ficar em branco, o site não permite ser exibido dentro de outras páginas; na TV ele abre normalmente. <a href="${esc(src)}" target="_blank" rel="noopener">Abrir em nova aba</a>`
       : 'Prévia em escala de uma tela 1920×1080, exatamente como aparece na TV.';

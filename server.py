@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.8.1
+Alava Vision — Servidor (server.py) · versão 0.9.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -9,6 +9,8 @@ COMO RODAR
         http://localhost:8080/api/player/state  → o que o player deve exibir AGORA (resultado da grade)
         http://localhost:8080/api/schedule      → blocos salvos na timeline
         http://localhost:8080/api/weather       → dados de clima usados na tela de previsão
+        http://localhost:8080/view/countdown/<id_do_item>  → contador regressivo de um item
+        http://localhost:8080/view/html/<id_do_item>       → página HTML local de um item
     Aviso instantâneo (WebSocket) para o player:
         ws://localhost:8080/ws/player  → manda o estado ao conectar e de novo a cada mudança.
         No terminal do servidor aparecem "[push] player conectado/desconectado".
@@ -20,6 +22,8 @@ COMO RODAR
 COMO REVERTER
     Com Git (a partir da 0.3.0):  git log --oneline  e  git checkout <commit> -- server.py
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
+    Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
+    Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
     Para a 0.2.0 (antes do Git):
     1. Pare o servidor e o player (Ctrl+C).
     2. Copie os arquivos de backup_v0.2.0_20261117/ por cima dos atuais
@@ -40,6 +44,8 @@ MAPA DO CÓDIGO
     Aviso instantâneo (WebSocket) ... WS /ws/player, _players, _broadcast(), _push_watcher(),
                                       _notify_players() (middleware: avisa após salvar no painel)
     Upload e arquivos ............... POST /api/upload, /uploads/* e /assets/* (StaticFiles)
+      HTML local (.html ou .zip) .... POST /api/upload-html, _extract_zip_safely(), _pick_html_entry(),
+                                      pasta data/html/<id>/ servida em /html/*
     Configurações ................... load_settings(), GET/PUT /api/settings
     Clima ........................... _fetch_forecast(), _build_weather(), _inmet_alerts(), get_weather(),
                                       GET /api/weather
@@ -49,7 +55,9 @@ MAPA DO CÓDIGO
       filtro de garoa falsa ......... _fix_drizzle() (usada em _build_weather no "agora")
       comparação de modelos ......... _log_model_compare() → data/wx_compare.csv (WX_COMPARE no .env)
     Telas exibidas pelo player ...... /view/image/{id}, /view/video/{id}, /view/weather,
-                                      /view/traffic, /view/message/{id}
+                                      /view/traffic, /view/message/{id},
+                                      /view/html/{id} (redireciona para /html/...), /view/countdown/{id}
+      vídeo repetir ou não .......... view_video(): config.loop (padrão True)
     Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
                                       Só clima e trânsito exibem o logo; sites, imagens, vídeos e
                                       mensagens aparecem sem ele.
@@ -76,7 +84,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 
 load_dotenv()
 
@@ -103,6 +111,12 @@ WX_COMPARE = os.getenv("WX_COMPARE", "1").strip() != "0"
 
 ALLOWED_IMAGE = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
 ALLOWED_VIDEO = {".mp4", ".webm", ".mov", ".avi"}
+
+# Widget de HTML local (0.9.0): cada envio vira uma pasta em data/html/<id>/
+HTML_DIR = DATA_DIR / "html"
+HTML_DIR.mkdir(parents=True, exist_ok=True)
+HTML_ZIP_MAX_FILES = 2000                 # limites contra .zip malformado ou "bomba"
+HTML_ZIP_MAX_BYTES = 300 * 1024 * 1024    # 300 MB descompactado
 
 DEFAULT_PLAYLIST = "main"
 
@@ -530,7 +544,75 @@ async def upload_file(file: UploadFile = File(...)):
     return {"filename": fname, "type": "image" if ext in ALLOWED_IMAGE else "video", "url": f"/uploads/{fname}"}
 
 
+def _pick_html_entry(folder: Path) -> Path | None:
+    """Página inicial de um .zip: index.html na raiz, ou dentro de uma única pasta, ou o 1º .html."""
+    for cand in (folder / "index.html", folder / "index.htm"):
+        if cand.is_file():
+            return cand
+    subdirs = [p for p in folder.iterdir() if p.is_dir()]
+    files = [p for p in folder.iterdir() if p.is_file()]
+    if len(subdirs) == 1 and not files:          # zip com tudo dentro de uma pasta, ex.: painel/index.html
+        return _pick_html_entry(subdirs[0])
+    pages = sorted(folder.rglob("*.htm*"), key=lambda p: (len(p.parts), str(p).lower()))
+    return pages[0] if pages else None
+
+
+def _extract_zip_safely(data: bytes, dest: Path) -> None:
+    """Descompacta sem deixar nenhum arquivo sair de `dest` (nomes como ../../server.py)."""
+    import io
+    import zipfile
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Arquivo .zip inválido")
+    infos = [i for i in zf.infolist() if not i.is_dir()]
+    if len(infos) > HTML_ZIP_MAX_FILES:
+        raise HTTPException(400, f"O .zip tem arquivos demais (máximo {HTML_ZIP_MAX_FILES})")
+    if sum(i.file_size for i in infos) > HTML_ZIP_MAX_BYTES:
+        raise HTTPException(400, "O .zip descompactado passa de 300 MB")
+    root = dest.resolve()
+    for info in infos:
+        target = (dest / info.filename).resolve()
+        if root not in target.parents:
+            raise HTTPException(400, f"Caminho inválido dentro do .zip: {info.filename}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as out:
+            out.write(src.read())
+
+
+@app.post("/api/upload-html", dependencies=[Depends(require_auth)])
+async def upload_html(file: UploadFile = File(...)):
+    """Widget de HTML local: recebe um .html (página única) ou um .zip (página + CSS/imagens/scripts).
+
+    Cada envio ganha uma pasta própria em data/html/<id>/, servida em /html/<id>/...
+    Links relativos da página (style.css, img/logo.png) funcionam porque a pasta inteira é servida.
+    """
+    import shutil
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".html", ".htm", ".zip"):
+        raise HTTPException(400, "Envie um arquivo .html ou .zip")
+    data = await file.read()
+    folder_id = uuid.uuid4().hex[:12]
+    dest = HTML_DIR / folder_id
+    dest.mkdir(parents=True)
+    try:
+        if ext == ".zip":
+            _extract_zip_safely(data, dest)
+            entry = _pick_html_entry(dest)
+            if not entry:
+                raise HTTPException(400, "Nenhuma página .html encontrada dentro do .zip")
+        else:
+            entry = dest / "index.html"
+            entry.write_bytes(data)
+    except Exception:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    rel = entry.relative_to(HTML_DIR).as_posix()
+    return {"url": "/html/" + urllib.parse.quote(rel), "file": file.filename, "entry": rel.split("/", 1)[1]}
+
+
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+app.mount("/html", StaticFiles(directory=str(HTML_DIR)), name="html")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
 
 
@@ -823,10 +905,89 @@ def view_image(item_id: str):
 
 @app.get("/view/video/{item_id}")
 def view_video(item_id: str):
-    url = _item_config(item_id).get("url", "")
+    """Vídeo em tela cheia. config.loop (padrão True, como antes da 0.9.0):
+    True  → repete até acabar a duração do item;
+    False → toca uma vez; o player percebe o fim (video.ended) e passa para o próximo item.
+    """
+    cfg = _item_config(item_id)
+    url = html.escape(cfg.get("url", ""))
+    loop = " loop" if cfg.get("loop", True) else ""
     return view_html(f"""
-<video src="{url}" autoplay muted loop playsinline
+<video src="{url}" autoplay muted{loop} playsinline
   style="width:100%;height:100%;object-fit:contain;background:#000"></video>""")
+
+
+@app.get("/view/html/{item_id}")
+def view_local_html(item_id: str):
+    """Widget de HTML local: redireciona para a página enviada (data/html/<id>/...)."""
+    from fastapi.responses import RedirectResponse
+    url = _item_config(item_id).get("url", "")
+    if not url.startswith("/html/"):
+        raise HTTPException(404, "Página HTML não encontrada")
+    return RedirectResponse(url)
+
+
+@app.get("/view/countdown/{item_id}")
+def view_countdown(item_id: str):
+    """Contador regressivo até config.target ("AAAA-MM-DDTHH:MM", horário do computador da TV).
+
+    Mostra dias / horas / minutos / segundos. Quando chega a hora, exibe config.end_text.
+    Com config.hide_after, o player deixa de exibir o item depois do fim (countdown_visible()).
+    """
+    cfg = _item_config(item_id)
+    title = html.escape(cfg.get("title", ""))
+    end_text = html.escape(cfg.get("end_text", "") or "Chegou a hora!")
+    bg = html.escape(cfg.get("bg_color", "#0a0a1a"))
+    fg = html.escape(cfg.get("text_color", "#ffffff"))
+    target = json.dumps(cfg.get("target", ""))
+    show_sec = "true" if cfg.get("show_seconds", True) else "false"
+    return view_html(f"""
+<style>
+  .cd{{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:5vh;background:{bg};color:{fg};text-align:center;padding:4vh 4vw;font-variant-numeric:tabular-nums}}
+  .cd-title{{font-size:6.5vh;font-weight:600;line-height:1.15;max-width:90vw}}
+  .cd-tiles{{display:flex;gap:2.4vw}}
+  .cd-tile{{min-width:15vw;padding:3vh 1.6vw;border-radius:2.4vh;background:color-mix(in srgb,{fg} 9%,transparent)}}
+  .cd-num{{font-size:16vh;font-weight:700;line-height:1}}
+  .cd-lab{{margin-top:1.6vh;font-size:2.6vh;letter-spacing:.25em;text-transform:uppercase;opacity:.7}}
+  .cd-when{{font-size:3vh;opacity:.65}}
+  .cd-end{{font-size:11vh;font-weight:700;line-height:1.15;max-width:90vw}}
+</style>
+<div class="cd">
+  <div class="cd-title">{title}</div>
+  <div class="cd-tiles" id="tiles"></div>
+  <div class="cd-end" id="end" hidden>{end_text}</div>
+  <div class="cd-when" id="when"></div>
+</div>
+<script>
+const TARGET = {target}, SHOW_SEC = {show_sec};
+const t = TARGET ? new Date(TARGET) : null;   // "AAAA-MM-DDTHH:MM" sem fuso = horário local
+const pad = n => String(n).padStart(2, '0');
+if (t && !isNaN(t)) {{
+  const dias = ['domingo','segunda','terça','quarta','quinta','sexta','sábado'];
+  document.getElementById('when').textContent =
+    `até ${{dias[t.getDay()]}}, ${{pad(t.getDate())}}/${{pad(t.getMonth()+1)}}/${{t.getFullYear()}} às ${{pad(t.getHours())}}:${{pad(t.getMinutes())}}`;
+}}
+function tile(n, lab) {{ return `<div class="cd-tile"><div class="cd-num">${{n}}</div><div class="cd-lab">${{lab}}</div></div>`; }}
+function tick() {{
+  if (!t || isNaN(t)) {{ document.getElementById('tiles').innerHTML = ''; return; }}
+  let s = Math.floor((t - Date.now()) / 1000);
+  if (s <= 0) {{
+    document.getElementById('tiles').hidden = true;
+    document.getElementById('when').hidden = true;
+    document.getElementById('end').hidden = false;
+    return;
+  }}
+  const d = Math.floor(s / 86400); s %= 86400;
+  const h = Math.floor(s / 3600); s %= 3600;
+  const m = Math.floor(s / 60); s %= 60;
+  // Dias só aparecem se faltar 1 dia ou mais; segundos, se a opção estiver ligada.
+  document.getElementById('tiles').innerHTML =
+    (d ? tile(d, d === 1 ? 'dia' : 'dias') : '') + tile(pad(h), 'horas') + tile(pad(m), 'min') +
+    (SHOW_SEC ? tile(pad(s), 'seg') : '');
+}}
+tick(); setInterval(tick, 1000);
+</script>""")
 
 
 WX_DATA_MARK = "/*__WX_DATA__*/null"
