@@ -1,6 +1,6 @@
 @echo off
 rem ============================================================================
-rem  Alava Vision - inicia tudo (v0.6.4)
+rem  Alava Vision - inicia tudo (v0.7.0)
 rem  1. Sobe o servidor/painel em segundo plano (janela minimizada)
 rem  2. Espera o servidor responder em http://127.0.0.1:PORT  (PORT do .env, padrao 8080)
 rem  3. Abre o player em tela cheia no monitor da TV (padrao: monitor 2)
@@ -16,7 +16,7 @@ set "PORT=8080"
 if exist ".env" for /f "usebackq tokens=1,* delims==" %%a in (".env") do if /i "%%a"=="PORT" set "PORT=%%b"
 set "PORT=%PORT: =%"
 
-start "Alava Vision - Servidor" /min python -m uvicorn server:app --host 0.0.0.0 --port %PORT%
+start "Alava Vision - Servidor" /min python -m uvicorn server:app --app-dir "%~dp0." --host 0.0.0.0 --port %PORT%
 
 echo Aguardando o servidor iniciar na porta %PORT%...
 set /a tentativas=0
@@ -34,5 +34,5 @@ goto aguardar
 
 :pronto
 echo Servidor no ar. Abrindo o player na TV...
-python player.py
+python "%~dp0player.py"
 pause
