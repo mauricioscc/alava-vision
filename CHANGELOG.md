@@ -7,6 +7,23 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.10.0] — 2026-11-18
+#### Adicionado
+- **Mensagem com muito mais opções:**
+  - Fundo em **cor sólida**, **degradê** (duas cores, quatro direções e 8 combinações prontas) ou **imagem**, com controle de escurecimento (0–85 %) para o texto continuar legível.
+  - **Título** opcional acima do texto; o texto mantém as quebras de linha digitadas.
+  - **Fonte** (padrão, serifada, destaque, manuscrita, máquina de escrever, todas do Windows e sem depender de internet), **alinhamento**, **negrito**, **sombra** e **animação de entrada** (aparecer suave, aproximar, subir).
+  - **Prévia ao vivo** no formulário, em escala de uma TV 1920×1080, que atualiza enquanto você edita (`/view/message-preview`).
+- **Buscar imagens na web** para o fundo da mensagem e para itens de imagem. A busca usa o **nome do item**, que é obrigatório antes de pesquisar. Com `PEXELS_API_KEY` no `.env`, usa o Pexels (fotos profissionais, chave gratuita); sem chave, o Openverse (sem cadastro, só licenças que permitem uso comercial e sem conteúdo sensível). A imagem escolhida é baixada para `data/uploads/`, então a TV mostra mesmo sem internet. O crédito do autor aparece discreto no canto inferior direito.
+- `PEXELS_API_KEY` no `.env.example`.
+
+#### Alterado
+- O texto da mensagem agora é exibido como texto puro. Antes, um `<b>` digitado era interpretado como HTML; agora aparece literalmente. Para páginas com HTML, use o widget **HTML local**.
+- As cores das mensagens só aceitam o formato `#rrggbb`, para nenhum valor estranho ir direto para a página.
+
+#### Segurança
+- `/api/image-import` só baixa imagens que o próprio servidor devolveu numa busca da última hora, então não serve para baixar qualquer endereço. Também confere se a resposta é imagem e se tem até 15 MB.
+
 ### [0.9.0] — 2026-11-18
 #### Adicionado
 - **Widget de Contador Regressivo** (⏳ Contador): título, data e hora do evento, cores do fundo e do texto, segundos opcionais e texto exibido quando a hora chega (padrão "Chegou a hora!"). Mostra dias só enquanto faltar 1 dia ou mais. Com "Tirar da TV depois que a hora chegar", o player deixa de exibir o item sozinho. Tela em `/view/countdown/{id}`.

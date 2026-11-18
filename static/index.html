@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.9.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.10.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -26,6 +26,10 @@
       vídeo: repetir ou não ........ #f-vid-loop, updateVideoHint(), useVideoLength()  → config.loop
       HTML local (.html/.zip) ...... #cfg-html, uploadFile(f,'html') → POST /api/upload-html
       contador regressivo .......... #cfg-countdown (#f-cd-*), fmtDateTime()
+      mensagem (fundo, fonte...) ... #cfg-message (#f-msg-*), setMsgForm(), getMsgConfig(), msgModeChanged(),
+                                     GRAD_PRESETS; prévia ao vivo #msg-live, msgPreviewSoon() → /view/message-preview
+      buscar imagens na web ........ #img-picker, openImagePicker(), runImageSearch(), pickImage()
+                                     → GET /api/image-search, POST /api/image-import (nome do item obrigatório)
     Pré-visualização ............... #pv-overlay, .pv-screen, .pv-media, openPreview(), fitFrame()
     Aba Programação (timeline) ..... #tab-schedule, objeto TL, loadTimeline(), renderTimeline()
       biblioteca arrastável ........ renderLibrary(), .chip
@@ -152,6 +156,26 @@ button,input,select,textarea{font-family:inherit}
 .badge-html{background:color-mix(in srgb,#ef4444 15%,transparent);color:#dc2626}
 .badge-countdown{background:color-mix(in srgb,#14b8a6 15%,transparent);color:#0d9488}
 .check-line{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px}
+/* Mensagem: prévia ao vivo, seções, seletor de fundo, degradês prontos */
+.msg-live{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#000;border:1px solid var(--border)}
+.msg-live iframe{position:absolute;top:0;left:0;width:1920px;height:1080px;border:0;transform-origin:0 0;pointer-events:none}
+.sect{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:6px;
+  padding-top:10px;border-top:1px solid var(--border)}
+.bg-seg{display:flex;gap:6px;flex-wrap:wrap}
+.bg-seg label{padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;border:1px solid var(--border)}
+.bg-seg label:has(input:checked){border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.bg-seg input{position:absolute;opacity:0;pointer-events:none}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.grad-presets{display:flex;gap:8px;flex-wrap:wrap}
+.grad-presets button{width:44px;height:30px;border-radius:7px;border:1px solid var(--border);cursor:pointer}
+/* Busca de imagens na web */
+.img-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;max-height:56vh;overflow:auto;padding:2px}
+.img-grid button{position:relative;padding:0;border:2px solid transparent;border-radius:8px;overflow:hidden;cursor:pointer;
+  background:var(--border);aspect-ratio:4/3}
+.img-grid button:hover,.img-grid button:focus-visible{border-color:var(--accent)}
+.img-grid img{width:100%;height:100%;object-fit:cover;display:block}
+.img-grid span{position:absolute;left:0;right:0;bottom:0;padding:3px 6px;font-size:10px;color:#fff;text-align:left;
+  background:linear-gradient(transparent,rgba(0,0,0,.75));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pl-duration{font-size:13px;color:var(--soft);white-space:nowrap;font-variant-numeric:tabular-nums}
 .toggle{position:relative;display:inline-block;width:36px;height:20px}
 .toggle input{position:absolute;opacity:0;width:0;height:0}
@@ -314,7 +338,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
   .sidebar{display:none}
   .content{padding:16px}
   .topbar{padding:12px 16px}
-  .settings-grid,.row2,.ed-fields{grid-template-columns:1fr}
+  .settings-grid,.row2,.row3,.ed-fields{grid-template-columns:1fr}
   .pl-item{grid-template-columns:18px minmax(0,1fr) auto auto;gap:8px}
   .pl-item .thumb,.pl-item .pl-duration{display:none}
   .pl-toolbar select{min-width:0;flex:1}
@@ -503,6 +527,8 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <div id="img-drop-text">📁 Clique ou arraste a imagem aqui<br><span class="hint">JPG, PNG, GIF, WebP, SVG</span></div>
           <img id="img-preview" class="upload-preview" alt="" hidden>
         </label>
+        <button class="btn btn-ghost" type="button" style="margin-top:8px" onclick="openImagePicker('image')">🔎 Buscar imagens na web</button>
+        <p class="hint">A busca usa o <b>nome do item</b> como termo de pesquisa.</p>
       </div>
 
       <div id="cfg-video" hidden class="form-group">
@@ -545,28 +571,93 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
         <p class="hint" style="color:var(--soft)">Mapa de trânsito em tempo real via Waze ou Google Maps.<br>Configure as coordenadas em Configurações.</p>
       </div>
 
-      <div id="cfg-message" hidden class="form-group" style="gap:12px">
+      <div id="cfg-message" hidden class="form-group" style="gap:12px" oninput="msgPreviewSoon()" onchange="msgPreviewSoon()">
+        <div class="msg-live"><iframe id="msg-live" title="Prévia da mensagem" tabindex="-1"></iframe></div>
+        <p class="hint" style="margin-top:-6px">Prévia ao vivo, em escala de uma TV 1920×1080.</p>
+
+        <div class="form-group"><label for="f-msg-title">Título <span class="hint">(opcional, aparece acima do texto)</span></label><input type="text" id="f-msg-title" placeholder="Aviso"></div>
         <div class="form-group"><label for="f-msg-text">Texto da mensagem</label><textarea id="f-msg-text" placeholder="São 12h, bom almoço!" rows="3"></textarea></div>
         <div class="row2">
           <div class="form-group"><label for="f-msg-start">Exibir a partir de</label><input type="text" id="f-msg-start" placeholder="12:00" maxlength="5"></div>
           <div class="form-group"><label for="f-msg-end">Exibir até</label><input type="text" id="f-msg-end" placeholder="14:00" maxlength="5"></div>
         </div>
         <p class="hint">Deixe em branco para sempre exibir.</p>
-        <div class="row2">
-          <div class="form-group"><label for="f-msg-bg">Cor do fundo</label><input type="color" id="f-msg-bg" value="#0a0a1a"></div>
-          <div class="form-group"><label for="f-msg-fg">Cor do texto</label><input type="color" id="f-msg-fg" value="#ffffff"></div>
+
+        <div class="sect">Fundo</div>
+        <div class="bg-seg" role="radiogroup" aria-label="Tipo de fundo">
+          <label><input type="radio" name="f-msg-mode" value="solid" checked onchange="msgModeChanged()"> Cor sólida</label>
+          <label><input type="radio" name="f-msg-mode" value="gradient" onchange="msgModeChanged()"> Degradê</label>
+          <label><input type="radio" name="f-msg-mode" value="image" onchange="msgModeChanged()"> Imagem</label>
         </div>
-        <div class="row2">
-          <div class="form-group"><label for="f-msg-size">Tamanho da fonte (px)</label><input type="number" id="f-msg-size" value="72" min="20" max="200"></div>
-          <div class="form-group" style="justify-content:flex-end">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-bottom:10px"><input type="checkbox" id="f-msg-clock" checked> Mostrar relógio</label>
+        <div id="msg-bg-solid" class="form-group"><label for="f-msg-bg">Cor do fundo</label><input type="color" id="f-msg-bg" value="#0a0a1a"></div>
+        <div id="msg-bg-gradient" hidden class="form-group" style="gap:10px">
+          <div class="grad-presets" id="grad-presets"></div>
+          <div class="row3">
+            <div class="form-group"><label for="f-msg-g1">Cor 1</label><input type="color" id="f-msg-g1" value="#0a0a1a"></div>
+            <div class="form-group"><label for="f-msg-g2">Cor 2</label><input type="color" id="f-msg-g2" value="#1e3a8a"></div>
+            <div class="form-group"><label for="f-msg-angle">Direção</label>
+              <select id="f-msg-angle">
+                <option value="180">↓ De cima para baixo</option><option value="90">→ Da esquerda para a direita</option>
+                <option value="135" selected>↘ Diagonal</option><option value="45">↗ Diagonal invertida</option>
+              </select></div>
           </div>
         </div>
+        <div id="msg-bg-image" hidden class="form-group" style="gap:10px">
+          <div class="inline">
+            <button class="btn btn-ghost" type="button" onclick="openImagePicker('message')">🔎 Buscar imagens na web</button>
+            <label class="btn btn-ghost" style="cursor:pointer">📁 Enviar do computador
+              <input type="file" accept="image/*" hidden onchange="onFileChange(event,'msgbg')"></label>
+          </div>
+          <p class="hint" id="msg-img-info">A busca usa o <b>nome do item</b> como termo de pesquisa.</p>
+          <div class="form-group"><label for="f-msg-dim">Escurecer a imagem: <span id="msg-dim-val">40%</span></label>
+            <input type="range" id="f-msg-dim" min="0" max="85" step="5" value="40" oninput="$('msg-dim-val').textContent=this.value+'%'"></div>
+        </div>
+
+        <div class="sect">Texto</div>
+        <div class="row3">
+          <div class="form-group"><label for="f-msg-fg">Cor do texto</label><input type="color" id="f-msg-fg" value="#ffffff"></div>
+          <div class="form-group"><label for="f-msg-size">Tamanho (px)</label><input type="number" id="f-msg-size" value="72" min="20" max="300"></div>
+          <div class="form-group"><label for="f-msg-font">Fonte</label>
+            <select id="f-msg-font">
+              <option value="sans">Padrão</option><option value="serif">Serifada (elegante)</option>
+              <option value="impact">Destaque (grossa)</option><option value="hand">Manuscrita</option><option value="mono">Máquina de escrever</option>
+            </select></div>
+        </div>
+        <div class="row3">
+          <div class="form-group"><label for="f-msg-align">Alinhamento</label>
+            <select id="f-msg-align"><option value="center">Centro</option><option value="left">Esquerda</option><option value="right">Direita</option></select></div>
+          <div class="form-group"><label for="f-msg-anim">Entrada</label>
+            <select id="f-msg-anim"><option value="none">Sem animação</option><option value="fade">Aparecer suave</option>
+              <option value="zoom">Aproximar</option><option value="slide">Subir</option></select></div>
+          <div class="form-group" style="justify-content:flex-end;gap:6px;padding-bottom:4px">
+            <label class="check-line"><input type="checkbox" id="f-msg-bold" checked> Negrito</label>
+            <label class="check-line"><input type="checkbox" id="f-msg-shadow"> Sombra no texto</label>
+          </div>
+        </div>
+        <label class="check-line"><input type="checkbox" id="f-msg-clock" checked> Mostrar relógio</label>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="saveItem()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Modal: buscar imagens na web (Pexels com chave no .env; senão Openverse) ═══ -->
+<div class="overlay top" id="img-picker" hidden onclick="if(event.target===this)closeImagePicker()">
+  <div class="modal pv-modal" role="dialog" aria-modal="true" aria-labelledby="ip-title">
+    <div class="modal-header">
+      <div><div class="modal-title" id="ip-title">Buscar imagens na web</div><div class="modal-sub" id="ip-sub"></div></div>
+      <button class="btn btn-icon btn-ghost" onclick="closeImagePicker()" aria-label="Fechar">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="inline">
+        <input type="text" id="ip-q" aria-label="Termo de busca" onkeydown="if(event.key==='Enter')runImageSearch()">
+        <button class="btn btn-primary" type="button" onclick="runImageSearch()">Buscar</button>
+      </div>
+      <div class="img-grid" id="ip-grid"></div>
+      <p class="hint" id="ip-note"></p>
     </div>
   </div>
 </div>
@@ -877,11 +968,10 @@ const VID_DROP_TEXT = '📁 Clique ou arraste o vídeo aqui<br><span class="hint
 const HTML_DROP_TEXT = '📁 Clique ou arraste a página aqui<br><span class="hint">.html (página única) ou .zip (página com CSS, imagens e scripts)</span>';
 
 function resetItemForm() {
-  ['f-name', 'f-url', 'f-msg-text', 'f-msg-start', 'f-msg-end', 'f-cd-title', 'f-cd-target', 'f-cd-end']
+  ['f-name', 'f-url', 'f-msg-title', 'f-msg-text', 'f-msg-start', 'f-msg-end', 'f-cd-title', 'f-cd-target', 'f-cd-end']
     .forEach(id => $(id).value = '');
   $('f-duration').value = '30';
-  $('f-msg-bg').value = '#0a0a1a'; $('f-msg-fg').value = '#ffffff';
-  $('f-msg-size').value = '72'; $('f-msg-clock').checked = true;
+  setMsgForm({});
   $('f-cd-bg').value = '#0a0a1a'; $('f-cd-fg').value = '#ffffff';
   $('f-cd-sec').checked = true; $('f-cd-hide').checked = false;
   $('img-preview').hidden = true; $('img-drop-text').hidden = false;
@@ -947,16 +1037,136 @@ function openEdit(id) {
     $('f-cd-sec').checked = c.show_seconds !== false;
     $('f-cd-hide').checked = !!c.hide_after;
   }
-  if (item.type === 'message') {
-    $('f-msg-text').value = c.text || '';
-    $('f-msg-start').value = c.time_start || '';
-    $('f-msg-end').value = c.time_end || '';
-    $('f-msg-bg').value = c.bg_color || '#0a0a1a';
-    $('f-msg-fg').value = c.text_color || '#ffffff';
-    $('f-msg-size').value = c.font_size || 72;
-    $('f-msg-clock').checked = c.show_clock !== false;
-  }
+  if (item.type === 'message') setMsgForm(c);
   $('modal').hidden = false;
+  if (item.type === 'message') msgPreviewSoon();
+}
+
+// ─── Mensagem: formulário ↔ config ───────────────────────────────────────────
+// Os padrões são os mesmos da 0.9.0, então mensagens antigas abrem e aparecem iguais.
+let msgBgImage = '', msgBgCredit = '';
+const GRAD_PRESETS = [['#0a0a1a', '#1e3a8a'], ['#1e3a8a', '#06b6d4'], ['#7c2d12', '#f59e0b'], ['#14532d', '#22c55e'],
+                      ['#4c1d95', '#ec4899'], ['#111827', '#6b7280'], ['#b91c1c', '#f97316'], ['#0f766e', '#a3e635']];
+$('grad-presets').innerHTML = GRAD_PRESETS.map(([a, b]) =>
+  `<button type="button" style="background:linear-gradient(135deg,${a},${b})" aria-label="Degradê ${a} para ${b}"
+    onclick="$('f-msg-g1').value='${a}';$('f-msg-g2').value='${b}';msgPreviewSoon()"></button>`).join('');
+
+function msgMode() { return document.querySelector('input[name="f-msg-mode"]:checked')?.value || 'solid'; }
+function msgModeChanged() {
+  const m = msgMode();
+  $('msg-bg-solid').hidden = m !== 'solid'; $('msg-bg-gradient').hidden = m !== 'gradient'; $('msg-bg-image').hidden = m !== 'image';
+  if (m === 'image' && !msgBgImage) $('f-msg-shadow').checked = true;   // texto sobre foto lê melhor com sombra
+  msgPreviewSoon();
+}
+function setMsgImage(url, credit) {
+  msgBgImage = url || ''; msgBgCredit = credit || '';
+  $('msg-img-info').innerHTML = msgBgImage
+    ? `✔ Imagem escolhida${msgBgCredit ? ' — ' + esc(msgBgCredit) : ''}. Busque ou envie outra para trocar.`
+    : 'A busca usa o <b>nome do item</b> como termo de pesquisa.';
+  msgPreviewSoon();
+}
+function setMsgForm(c) {
+  $('f-msg-title').value = c.title || '';
+  $('f-msg-text').value = c.text || '';
+  $('f-msg-start').value = c.time_start || ''; $('f-msg-end').value = c.time_end || '';
+  const mode = c.bg_mode || 'solid';
+  document.querySelectorAll('input[name="f-msg-mode"]').forEach(r => r.checked = r.value === mode);
+  $('f-msg-bg').value = c.bg_color || '#0a0a1a';
+  $('f-msg-g1').value = c.bg_color || '#0a0a1a'; $('f-msg-g2').value = c.bg_color2 || '#1e3a8a';
+  $('f-msg-angle').value = String(c.bg_angle ?? 135);
+  $('f-msg-dim').value = c.bg_dim ?? 40; $('msg-dim-val').textContent = $('f-msg-dim').value + '%';
+  $('f-msg-fg').value = c.text_color || '#ffffff';
+  $('f-msg-size').value = c.font_size || 72;
+  $('f-msg-font').value = c.font_family || 'sans';
+  $('f-msg-align').value = c.align || 'center';
+  $('f-msg-anim').value = c.animation || 'none';
+  $('f-msg-bold').checked = c.bold !== false;
+  $('f-msg-shadow').checked = c.shadow ?? mode === 'image';
+  $('f-msg-clock').checked = c.show_clock !== false;
+  setMsgImage(c.bg_image, c.bg_credit);
+  msgModeChanged();
+}
+function getMsgConfig() {
+  const mode = msgMode();
+  return {
+    title: $('f-msg-title').value, text: $('f-msg-text').value,
+    time_start: $('f-msg-start').value, time_end: $('f-msg-end').value,
+    bg_mode: mode,
+    bg_color: mode === 'gradient' ? $('f-msg-g1').value : $('f-msg-bg').value,
+    bg_color2: $('f-msg-g2').value, bg_angle: parseInt($('f-msg-angle').value),
+    bg_image: msgBgImage, bg_credit: msgBgCredit, bg_dim: parseInt($('f-msg-dim').value),
+    text_color: $('f-msg-fg').value, font_size: parseInt($('f-msg-size').value) || 72,
+    font_family: $('f-msg-font').value, align: $('f-msg-align').value, animation: $('f-msg-anim').value,
+    bold: $('f-msg-bold').checked, shadow: $('f-msg-shadow').checked, show_clock: $('f-msg-clock').checked,
+  };
+}
+
+// Prévia ao vivo: recarrega o iframe 300 ms depois da última alteração (não a cada tecla).
+let msgPvTimer = null;
+function msgPreviewSoon() {
+  clearTimeout(msgPvTimer);
+  msgPvTimer = setTimeout(() => {
+    if ($('cfg-message').hidden) return;
+    $('msg-live').src = '/view/message-preview?c=' + encodeURIComponent(JSON.stringify(getMsgConfig()));
+    fitMsgLive();
+  }, 300);
+}
+function fitMsgLive() {
+  const box = document.querySelector('.msg-live');
+  if (box && box.clientWidth) $('msg-live').style.transform = `scale(${box.clientWidth / 1920})`;
+}
+addEventListener('resize', fitMsgLive);
+
+// ─── Buscar imagens na web ───────────────────────────────────────────────────
+// O termo é o nome do item, que é obrigatório antes de buscar.
+// target: 'message' (fundo da mensagem) ou 'image' (item de imagem).
+let pickerTarget = null;
+function openImagePicker(target) {
+  const name = $('f-name').value.trim();
+  const generic = ['Mensagem', 'Imagem'];
+  if (!name || generic.includes(name)) {
+    status('Dê um nome ao item antes de buscar: ele é usado como termo de pesquisa', 'err');
+    $('f-name').focus(); $('f-name').select();
+    return;
+  }
+  pickerTarget = target;
+  $('ip-q').value = name;
+  $('ip-grid').innerHTML = ''; $('ip-note').textContent = '';
+  $('img-picker').hidden = false;
+  runImageSearch();
+}
+function closeImagePicker() { $('img-picker').hidden = true; $('ip-grid').innerHTML = ''; }
+let pickerResults = [];
+async function runImageSearch() {
+  const q = $('ip-q').value.trim();
+  if (q.length < 2) { status('Digite pelo menos 2 letras', 'err'); return; }
+  $('ip-sub').textContent = `Buscando "${q}"…`; $('ip-grid').innerHTML = '';
+  try {
+    const r = await api('GET', '/api/image-search?q=' + encodeURIComponent(q));
+    pickerResults = r.results;
+    $('ip-sub').textContent = `${r.results.length} resultado(s) para "${q}" · fonte: ${r.source}`;
+    $('ip-grid').innerHTML = r.results.map((x, i) =>
+      `<button type="button" onclick="pickImage(${i})" title="${esc(x.author)} · ${esc(x.license)}">
+         <img src="${esc(x.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer"><span>${esc(x.author || x.source)}</span></button>`).join('')
+      || '<p class="hint">Nada encontrado. Tente outro termo (em inglês costuma ter mais resultados).</p>';
+    $('ip-note').innerHTML = r.source === 'Openverse'
+      ? 'Imagens com licença livre para uso comercial (Openverse). O crédito do autor aparece no canto da tela. Para fotos mais profissionais, coloque PEXELS_API_KEY no .env.'
+      : 'Fotos do Pexels, de uso livre. O crédito do fotógrafo aparece no canto da tela.';
+  } catch(e) { $('ip-sub').textContent = ''; status('Erro na busca: ' + e.message, 'err'); }
+}
+async function pickImage(i) {
+  const x = pickerResults[i];
+  $('ip-sub').textContent = 'Baixando a imagem…';
+  try {
+    const r = await api('POST', '/api/image-import', {url: x.url});
+    const credit = `Foto: ${x.author || 'autor desconhecido'} / ${x.source}` + (x.source === 'Openverse' ? ` (${x.license})` : '');
+    if (pickerTarget === 'message') setMsgImage(r.url, credit);
+    else {
+      pendingFile = {url: r.url, type: 'image'};
+      $('img-preview').src = r.url; $('img-preview').hidden = false; $('img-drop-text').hidden = true;
+    }
+    closeImagePicker(); status('Imagem escolhida');
+  } catch(e) { $('ip-sub').textContent = ''; status('Erro ao baixar: ' + e.message, 'err'); }
 }
 
 function closeModal() { $('modal').hidden = true; $('vid-preview').pause(); }
@@ -977,6 +1187,7 @@ function setType(t) {
                  message:'Mensagem', countdown:'Contador regressivo', html:'Página HTML'};
   if (!$('f-name').value || Object.values(names).includes($('f-name').value)) $('f-name').value = names[t];
   $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30}[t] || 30;
+  if (t === 'message') msgPreviewSoon();
 }
 
 function showCfgPanel(t) {
@@ -1014,11 +1225,8 @@ async function saveItem() {
       show_seconds: $('f-cd-sec').checked, hide_after: $('f-cd-hide').checked,
     };
   } else if (currentType === 'message') {
-    config = {
-      text: $('f-msg-text').value, time_start: $('f-msg-start').value, time_end: $('f-msg-end').value,
-      bg_color: $('f-msg-bg').value, text_color: $('f-msg-fg').value,
-      font_size: parseInt($('f-msg-size').value) || 72, show_clock: $('f-msg-clock').checked,
-    };
+    config = getMsgConfig();
+    if (config.bg_mode === 'image' && !config.bg_image) { status('Escolha uma imagem de fundo (busque na web ou envie)', 'err'); return; }
   }
   try {
     if (editId) { await api('PUT', `/api/items/${editId}`, {name, duration, config}); status('Item atualizado'); }
@@ -1032,7 +1240,7 @@ function onDrop(e, type) { e.preventDefault(); const f = e.dataTransfer.files[0]
 function onFileChange(e, type) { const f = e.target.files[0]; if (f) uploadFile(f, type); }
 
 async function uploadFile(file, type) {
-  const area = $({image: 'img-drop', video: 'vid-drop', html: 'html-drop'}[type]);
+  const area = $({image: 'img-drop', video: 'vid-drop', html: 'html-drop', msgbg: 'msg-bg-image'}[type]);
   area.classList.add('drag');
   try {
     const fd = new FormData(); fd.append('file', file);
@@ -1043,6 +1251,10 @@ async function uploadFile(file, type) {
       throw new Error(msg);
     }
     const data = await r.json();
+    if (type === 'msgbg') {   // fundo da mensagem: não é o "arquivo do item"
+      if (data.type !== 'image') throw new Error('Envie uma imagem');
+      setMsgImage(data.url, ''); status('Imagem enviada'); return;
+    }
     pendingFile = {url: data.url, type: data.type || type, file: type === 'html' ? file.name : undefined};
     if (type === 'html') {
       $('html-drop-text').textContent = '✔ ' + file.name + (data.entry && file.name.toLowerCase().endsWith('.zip') ? ` (abre ${data.entry})` : '') + ' — clique para trocar';

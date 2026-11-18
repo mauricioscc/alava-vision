@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.9.0
+Alava Vision — Servidor (server.py) · versão 0.10.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -11,6 +11,7 @@ COMO RODAR
         http://localhost:8080/api/weather       → dados de clima usados na tela de previsão
         http://localhost:8080/view/countdown/<id_do_item>  → contador regressivo de um item
         http://localhost:8080/view/html/<id_do_item>       → página HTML local de um item
+        http://localhost:8080/view/message-preview?c={"text":"Oi","bg_mode":"gradient"}  → prévia de mensagem
     Aviso instantâneo (WebSocket) para o player:
         ws://localhost:8080/ws/player  → manda o estado ao conectar e de novo a cada mudança.
         No terminal do servidor aparecem "[push] player conectado/desconectado".
@@ -24,6 +25,9 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.9.0 (antes da mensagem avançada, RSS, curiosidades e voz):
+        git checkout 027e198 -- server.py player.py static/index.html
+        Mensagens novas continuam abrindo na 0.9.0, só sem as opções extras (fundo, fonte...).
     Para a 0.2.0 (antes do Git):
     1. Pare o servidor e o player (Ctrl+C).
     2. Copie os arquivos de backup_v0.2.0_20261117/ por cima dos atuais
@@ -46,6 +50,8 @@ MAPA DO CÓDIGO
     Upload e arquivos ............... POST /api/upload, /uploads/* e /assets/* (StaticFiles)
       HTML local (.html ou .zip) .... POST /api/upload-html, _extract_zip_safely(), _pick_html_entry(),
                                       pasta data/html/<id>/ servida em /html/*
+      buscar imagens na web ......... GET /api/image-search (_search_pexels / _search_openverse, PEXELS_API_KEY),
+                                      POST /api/image-import (só URLs de busca recente: _img_allowed)
     Configurações ................... load_settings(), GET/PUT /api/settings
     Clima ........................... _fetch_forecast(), _build_weather(), _inmet_alerts(), get_weather(),
                                       GET /api/weather
@@ -58,6 +64,8 @@ MAPA DO CÓDIGO
                                       /view/traffic, /view/message/{id},
                                       /view/html/{id} (redireciona para /html/...), /view/countdown/{id}
       vídeo repetir ou não .......... view_video(): config.loop (padrão True)
+      mensagem ...................... view_message() e view_message_preview() → _render_message()
+                                      (fundo sólido/degradê/imagem, MSG_FONTS, MSG_ANIMS, _css_color())
     Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
                                       Só clima e trânsito exibem o logo; sites, imagens, vídeos e
                                       mensagens aparecem sem ele.
@@ -84,7 +92,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 load_dotenv()
 
@@ -106,6 +114,8 @@ WEATHER_LON = os.getenv("WEATHER_LON", "-46.6333")
 WEATHER_CITY = os.getenv("WEATHER_CITY", "São Paulo")
 MAPS_API_KEY = os.getenv("MAPS_API_KEY", "")
 IBGE_CODE = os.getenv("IBGE_CODE", "")
+# Busca de imagens na web (0.10.0): com chave usa o Pexels; sem chave, o Openverse (sem cadastro)
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 # Registro temporário de comparação entre modelos de clima (ligado por padrão; WX_COMPARE=0 desliga)
 WX_COMPARE = os.getenv("WX_COMPARE", "1").strip() != "0"
 
@@ -611,6 +621,90 @@ async def upload_html(file: UploadFile = File(...)):
     return {"url": "/html/" + urllib.parse.quote(rel), "file": file.filename, "entry": rel.split("/", 1)[1]}
 
 
+# ─── Busca de imagens na web (Pexels ou Openverse) ───────────────────────────
+#
+# O painel pesquisa pelo NOME do item. O servidor só aceita importar imagens que ele mesmo
+# devolveu numa busca recente (_img_allowed), então /api/image-import não vira um
+# "baixador de qualquer endereço". A imagem escolhida é salva em data/uploads/: a TV
+# continua mostrando mesmo sem internet e sem depender do site de origem.
+
+IMG_IMPORT_MAX = 15 * 1024 * 1024
+IMG_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
+_img_allowed: dict[str, float] = {}   # url → quando apareceu numa busca
+
+
+def _search_pexels(q: str, n: int) -> list[dict]:
+    url = "https://api.pexels.com/v1/search?" + urllib.parse.urlencode(
+        {"query": q, "per_page": n, "locale": "pt-BR", "orientation": "landscape"})
+    req = urllib.request.Request(url, headers={"Authorization": PEXELS_API_KEY, "User-Agent": "AlavaVision/1.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    return [{"thumb": p["src"]["medium"], "url": p["src"]["large2x"], "author": p.get("photographer", ""),
+             "license": "Pexels", "link": p.get("url", ""), "source": "Pexels"} for p in data.get("photos", [])]
+
+
+def _search_openverse(q: str, n: int) -> list[dict]:
+    # license_type=commercial: só licenças que permitem uso em empresa; mature=false: sem conteúdo sensível.
+    # Sem cadastro, o Openverse aceita no máximo 20 por página (acima disso responde 401).
+    url = "https://api.openverse.org/v1/images/?" + urllib.parse.urlencode(
+        {"q": q, "page_size": min(n, 20), "license_type": "commercial", "mature": "false"})
+    data = _http_json(url, timeout=12)
+    out = []
+    for p in data.get("results", []):
+        lic = f"CC {str(p.get('license', '')).upper()} {p.get('license_version') or ''}".strip()
+        if p.get("license") in ("cc0", "pdm"):
+            lic = "Domínio público"
+        out.append({"thumb": p.get("thumbnail") or p.get("url"), "url": p.get("url"),
+                    "author": p.get("creator") or "", "license": lic,
+                    "link": p.get("foreign_landing_url") or "", "source": "Openverse"})
+    return [x for x in out if x["url"]]
+
+
+@app.get("/api/image-search", dependencies=[Depends(require_auth)])
+def image_search(q: str, n: int = 24):
+    q = q.strip()
+    if len(q) < 2:
+        raise HTTPException(400, "Dê um nome ao item antes de buscar (ele é usado como termo de busca)")
+    n = max(4, min(40, n))
+    source = "Pexels" if PEXELS_API_KEY else "Openverse"
+    try:
+        results = _search_pexels(q, n) if PEXELS_API_KEY else _search_openverse(q, n)
+    except Exception as e:
+        raise HTTPException(502, f"Falha ao buscar imagens no {source}: {e}")
+    now = time.time()
+    for k in [k for k, t in _img_allowed.items() if now - t > 3600]:
+        _img_allowed.pop(k, None)
+    for r in results:
+        _img_allowed[r["url"]] = now
+    return {"source": source, "results": results}
+
+
+@app.post("/api/image-import", dependencies=[Depends(require_auth)])
+async def image_import(request: Request):
+    url = str((await request.json()).get("url", ""))
+    if url not in _img_allowed:
+        raise HTTPException(400, "Essa imagem não veio de uma busca recente. Busque de novo.")
+
+    def fetch() -> tuple[bytes, str]:
+        req = urllib.request.Request(url, headers={"User-Agent": "AlavaVision/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            ctype = r.headers.get_content_type()
+            data = r.read(IMG_IMPORT_MAX + 1)
+        return data, ctype
+
+    try:
+        data, ctype = await asyncio.to_thread(fetch)
+    except Exception as e:
+        raise HTTPException(502, f"Não consegui baixar a imagem: {e}")
+    if ctype not in IMG_TYPES:
+        raise HTTPException(400, f"O endereço não devolveu uma imagem ({ctype})")
+    if len(data) > IMG_IMPORT_MAX:
+        raise HTTPException(400, "Imagem maior que 15 MB")
+    fname = f"{uuid.uuid4().hex[:12]}{IMG_TYPES[ctype]}"
+    (UPLOADS_DIR / fname).write_bytes(data)
+    return {"url": f"/uploads/{fname}", "type": "image"}
+
+
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 app.mount("/html", StaticFiles(directory=str(HTML_DIR)), name="html")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
@@ -1044,20 +1138,103 @@ tick(); setInterval(tick, 1000);
 </script>""")
 
 
+MSG_FONTS = {   # fontes que já vêm no Windows (o PC da TV não precisa de internet para elas)
+    "sans": "'Segoe UI',system-ui,sans-serif",
+    "serif": "Georgia,'Times New Roman',serif",
+    "impact": "Impact,'Arial Black',sans-serif",
+    "hand": "'Segoe Print','Comic Sans MS',cursive",
+    "mono": "Consolas,'Courier New',monospace",
+}
+MSG_ANIMS = {
+    "none": "",
+    "fade": "@keyframes in{from{opacity:0}to{opacity:1}}",
+    "zoom": "@keyframes in{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:none}}",
+    "slide": "@keyframes in{from{opacity:0;transform:translateY(8vh)}to{opacity:1;transform:none}}",
+}
+
+
+def _css_color(value, default: str) -> str:
+    """Aceita só #rgb/#rrggbb (o valor vai direto para o CSS)."""
+    v = str(value or "")
+    return v if len(v) in (4, 7) and v.startswith("#") and all(c in "0123456789abcdefABCDEF" for c in v[1:]) else default
+
+
+def _num(value, default, lo, hi):
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
 @app.get("/view/message/{item_id}")
 def view_message(item_id: str):
-    cfg = _item_config(item_id)
-    text = cfg.get("text", "")
-    bg = cfg.get("bg_color", "#0a0a1a")
-    fg = cfg.get("text_color", "#ffffff")
-    size = cfg.get("font_size", 72)
+    return _render_message(_item_config(item_id), item_id)
+
+
+@app.get("/view/message-preview")
+def view_message_preview(c: str = "{}"):
+    """Prévia ao vivo do formulário do painel: recebe a config em JSON (?c=...), sem salvar nada."""
+    try:
+        cfg = json.loads(c)
+    except ValueError:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    cfg["speak"] = False   # a prévia não fala
+    return _render_message(cfg, None)
+
+
+def _render_message(cfg: dict, item_id: str | None) -> HTMLResponse:
+    """Mensagem de texto. Campos de config (todos opcionais, com o padrão da 0.9.0):
+
+    text, title ............ texto principal e título acima dele (quebras de linha são mantidas)
+    bg_mode ................ "solid" (bg_color) | "gradient" (bg_color → bg_color2, bg_angle) | "image"
+    bg_image, bg_dim ....... imagem de fundo e escurecimento por cima (0–85 %) para o texto ler bem
+    bg_credit .............. crédito da foto (busca na web), no canto inferior direito
+    text_color, font_size, font_family (MSG_FONTS), bold, align, shadow, animation (MSG_ANIMS)
+    show_clock ............. relógio acima do texto
+    speak .................. ler o texto em voz alta (Piper, 0.10.0+)
+    """
+    nl2br = lambda s: html.escape(str(s or "")).replace("\n", "<br>")
+    text, title = nl2br(cfg.get("text")), nl2br(cfg.get("title"))
+    bg = _css_color(cfg.get("bg_color"), "#0a0a1a")
+    bg2 = _css_color(cfg.get("bg_color2"), "#1e3a8a")
+    fg = _css_color(cfg.get("text_color"), "#ffffff")
+    size = _num(cfg.get("font_size"), 72, 20, 300)
+    angle = _num(cfg.get("bg_angle"), 135, 0, 360)
+    dim = _num(cfg.get("bg_dim"), 40, 0, 85)
+    mode = cfg.get("bg_mode") or "solid"
+    img = str(cfg.get("bg_image") or "")
+    if mode == "image" and img.startswith("/uploads/"):
+        background = f"#000 url('{html.escape(img)}') center/cover no-repeat"
+        overlay = f"<div style='position:absolute;inset:0;background:rgba(0,0,0,{dim / 100})'></div>"
+    elif mode == "gradient":
+        background, overlay = f"linear-gradient({angle}deg,{bg},{bg2})", ""
+    else:
+        background, overlay = bg, ""
+    font = MSG_FONTS.get(cfg.get("font_family"), MSG_FONTS["sans"])
+    weight = 700 if cfg.get("bold", True) else 400
+    align = cfg.get("align") if cfg.get("align") in ("left", "center", "right") else "center"
+    flex_align = {"left": "flex-start", "center": "center", "right": "flex-end"}[align]
+    shadow = "text-shadow:0 .4vh 2.4vh rgba(0,0,0,.55);" if cfg.get("shadow", mode == "image") else ""
+    anim_name = cfg.get("animation") if cfg.get("animation") in MSG_ANIMS else "none"
+    anim_css = MSG_ANIMS[anim_name]
+    anim_use = "animation:in 1.1s cubic-bezier(.2,.7,.2,1) both;" if anim_css else ""
     show_clock = "true" if cfg.get("show_clock", True) else "false"
+    credit = html.escape(str(cfg.get("bg_credit") or "")) if mode == "image" else ""
+    audio = (f'<audio src="/api/tts/{html.escape(item_id)}.wav" autoplay></audio>'
+             if cfg.get("speak") and item_id else "")
     return view_html(f"""
-<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;background:{bg};gap:32px;padding:60px;text-align:center">
-  <div id="clock" style="font-size:48px;opacity:.5;font-weight:200;letter-spacing:4px"></div>
-  <div style="font-size:{size}px;font-weight:600;color:{fg};line-height:1.2;max-width:900px">{text}</div>
+<style>{anim_css}</style>
+<div style="position:fixed;inset:0;background:{background}">{overlay}</div>
+<div style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:{flex_align};
+  justify-content:center;gap:4vh;padding:8vh 7vw;text-align:{align};color:{fg};font-family:{font};{shadow}">
+  <div id="clock" style="font-size:5vh;opacity:.6;font-weight:300;letter-spacing:.3vw;font-variant-numeric:tabular-nums"></div>
+  {f'<div style="font-size:{round(size * 0.55)}px;font-weight:600;opacity:.85;letter-spacing:.05em;{anim_use}">{title}</div>' if title else ''}
+  <div style="font-size:{size}px;font-weight:{weight};line-height:1.2;max-width:86vw;{anim_use}animation-delay:.15s">{text}</div>
 </div>
+{f'<div style="position:fixed;right:1.4vw;bottom:1.2vh;font:1.5vh system-ui;color:#fff;opacity:.6;text-shadow:0 0 4px #000">{credit}</div>' if credit else ''}
+{audio}
 <script>
 if({show_clock}){{
   function tick(){{

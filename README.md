@@ -80,6 +80,8 @@ vídeos e mensagens aparecem sem alteração. O arquivo usado é `assets/waterma
 ### Tipos de item com opções especiais
 
 - **Vídeo:** a opção *Repetir* (ligada por padrão) faz o vídeo recomeçar até completar a duração do item. Desligada, ele toca uma vez e a TV passa para o próximo item assim que o vídeo acaba. O painel mostra quanto tempo o vídeo tem e oferece usar esse tempo como duração.
+- **Mensagem:** título opcional, fundo em cor sólida, degradê ou imagem (com escurecimento), fonte, alinhamento, negrito, sombra e animação de entrada. O formulário mostra uma prévia ao vivo, do tamanho da TV.
+- **Buscar imagens na web** (fundo da mensagem e itens de imagem): pesquisa pelo **nome do item**, por isso dê um nome antes de buscar. Sem configuração, usa o Openverse (imagens de licença livre). Para fotos mais profissionais, crie uma chave gratuita em pexels.com/api e coloque `PEXELS_API_KEY=` no `.env`. A imagem escolhida fica salva no computador, com o crédito do autor no canto da tela.
 - **Contador regressivo:** título, data e hora do evento, cores e texto exibido quando a hora chega. Com *Tirar da TV depois que a hora chegar*, o item deixa de aparecer sozinho.
 - **HTML local:** envie um `.html` (página única) ou um `.zip` com a página e seus arquivos (CSS, imagens, scripts). A página inicial do `.zip` é o `index.html`. Cada envio fica em `data/html/<id>/`.
 
