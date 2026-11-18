@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.8.0
+Alava Vision — Player (player.py) · versão 0.9.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -44,6 +44,8 @@ MAPA DO CÓDIGO
     Consulta ao servidor ............ fetch_state()  → GET /api/player/state (reserva quando o WebSocket cai)
     Aviso instantâneo (WebSocket) ... PushChannel  → ws://127.0.0.1:PORT/ws/player (thread "push")
     Janela de horário de mensagens .. time_in_window()
+    Contador que some após o fim .... countdown_visible()   (config.hide_after)
+    Vídeo sem repetição ............. plays_once(), VIDEO_ENDED_JS  → avança quando o vídeo acaba
     URL de cada tipo de item ........ item_url()
     Loop de exibição ................ run()
     Parâmetros de linha de comando .. main()
@@ -62,7 +64,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -217,6 +219,25 @@ def time_in_window(config: dict) -> bool:
     return start <= datetime.now().strftime("%H:%M") <= end
 
 
+def countdown_visible(item: dict) -> bool:
+    """Contador com "sumir depois do fim" ligado deixa de ser exibido quando a hora chega."""
+    cfg = item.get("config", {})
+    if item.get("type") != "countdown" or not cfg.get("hide_after"):
+        return True
+    try:
+        return datetime.now() < datetime.fromisoformat(cfg.get("target", ""))
+    except ValueError:
+        return True   # data inválida: mostra o item (a própria tela avisa sem números)
+
+
+def plays_once(item: dict) -> bool:
+    """Vídeo com "Repetir" desligado: toca uma vez e o player avança quando ele acaba."""
+    return item.get("type") == "video" and item.get("config", {}).get("loop", True) is False
+
+
+VIDEO_ENDED_JS = "() => { const v = document.querySelector('video'); return !!(v && v.ended); }"
+
+
 def item_url(item: dict, server: str) -> str:
     t = item["type"]
     if t == "url":
@@ -309,7 +330,7 @@ def run(args, push: PushChannel):
                         log("Sem API, usando última programação:", e)
 
                 items = [x for x in state.get("items", [])
-                         if x.get("active") and time_in_window(x.get("config", {}))]
+                         if x.get("active") and time_in_window(x.get("config", {})) and countdown_visible(x)]
 
                 if not items:
                     page.set_content(IDLE_HTML)
@@ -331,7 +352,9 @@ def run(args, push: PushChannel):
                 log(f"[{src.get('name', '?')}] {item['type']} · {item['name']} — {duration}s")
 
                 # Um único item (ex.: sobreposição de clima) não é recarregado a cada ciclo.
-                if not (len(items) == 1 and url == current_url):
+                # Exceção: vídeo sem repetição precisa recomeçar do início a cada volta.
+                once = plays_once(item)
+                if once or not (len(items) == 1 and url == current_url):
                     try:
                         page.goto(url, wait_until="domcontentloaded", timeout=20_000)
                         current_url = url
@@ -352,6 +375,13 @@ def run(args, push: PushChannel):
                 while time.time() < deadline:
                     push.wait(1)
                     guard.check()
+                    if once:
+                        try:
+                            if page.evaluate(VIDEO_ENDED_JS):
+                                log("Vídeo terminou — próximo item")
+                                break
+                        except Exception:
+                            pass  # página trocando ou fechada: segue pelo tempo normal
                     fresh = push.current()
                     if not fresh:
                         if time.time() - last_check < 5:

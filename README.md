@@ -73,9 +73,15 @@ vídeos e mensagens aparecem sem alteração. O arquivo usado é `assets/waterma
 
 | Aba                       | Para quê                                                                                                                                      |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Playlists**       | Criar playlists e adicionar sites, imagens, vídeos, clima, trânsito e mensagens. Arrastar para reordenar, ativar/desativar, pré-visualizar. |
+| **Playlists**       | Criar playlists e adicionar sites, imagens, vídeos, clima, trânsito, mensagens, contadores regressivos e páginas HTML locais. Arrastar para reordenar, ativar/desativar, pré-visualizar. |
 | **Programação**   | Timeline de 00:00 a 23:59. Arraste playlists e itens da biblioteca, mova, redimensione pelas bordas ou digite os horários.                    |
 | **Configurações** | Cidade, coordenadas e código IBGE (clima e alertas do INMET), chave do Google Maps, cenários de teste da tela de clima.                      |
+
+### Tipos de item com opções especiais
+
+- **Vídeo:** a opção *Repetir* (ligada por padrão) faz o vídeo recomeçar até completar a duração do item. Desligada, ele toca uma vez e a TV passa para o próximo item assim que o vídeo acaba. O painel mostra quanto tempo o vídeo tem e oferece usar esse tempo como duração.
+- **Contador regressivo:** título, data e hora do evento, cores e texto exibido quando a hora chega. Com *Tirar da TV depois que a hora chegar*, o item deixa de aparecer sozinho.
+- **HTML local:** envie um `.html` (página única) ou um `.zip` com a página e seus arquivos (CSS, imagens, scripts). A página inicial do `.zip` é o `index.html`. Cada envio fica em `data/html/<id>/`.
 
 ### Como a TV decide o que exibir
 
