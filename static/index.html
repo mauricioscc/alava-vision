@@ -38,7 +38,10 @@
     Pré-visualização ............... #pv-overlay, .pv-screen, .pv-media, openPreview(), fitFrame()
     Aba Programação (timeline) ..... #tab-schedule, objeto TL, loadTimeline(), renderTimeline()
       biblioteca arrastável ........ renderLibrary(), .chip
-      régua, trilhas, zoom ......... renderRuler(), .track, setZoom(), PXH
+      régua, trilhas, zoom ......... renderRuler(), .track, PXH, TL.pxh (zoom contínuo) e TL.zoom (passo da grade)
+      zoom com o mouse ............. #zoom-seg (atalhos Dia todo…1 min), .zoom-ctl (#zoom-range, −/+), applyZoom(),
+                                     zoomBy(), zoomFromSlider(), renderZoomCtl(), zoomStep(), snapStep();
+                                     Ctrl + roda / roda sobre #ruler (listener 'wheel'), arrastar #ruler = rolar
       soltar da biblioteca ......... setupTrackDrop(), addBlock(), .ghost
       mover/redimensionar blocos ... attachBlockDrag(), placeBlock(), .blk .h-l / .h-r
       edição numérica .............. renderEditor(), applyTimes(), #tl-editor
@@ -275,6 +278,14 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 .seg button + button{border-left:1px solid var(--border)}
 .seg button.active{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-weight:600}
 .save-state{font-size:12.5px;color:var(--soft);margin-left:auto}
+/* Zoom contínuo da linha do tempo (0.11.0) */
+.zoom-ctl{display:inline-flex;align-items:center;gap:6px}
+.zoom-ctl .btn{padding:4px 10px;font-size:15px;line-height:1}
+.zoom-ctl input[type=range]{width:140px;padding:0;accent-color:var(--accent)}
+.zoom-ctl .hint{min-width:92px;font-variant-numeric:tabular-nums}
+.zoom-tip{flex-basis:100%;margin-top:-4px}
+.ruler{cursor:grab;touch-action:none}
+.ruler.panning{cursor:grabbing}
 .save-state.err{color:var(--danger)}
 .tl-layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:16px;align-items:start}
 .lib{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;
@@ -512,13 +523,24 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <div class="ruler-banner" id="ruler-banner"></div>
     <div class="tl-toolbar">
       <span class="hint" style="color:var(--soft)">Zoom</span>
+      <!-- Zoom contínuo (0.11.0): atalhos, − / barra / +, Ctrl + roda do mouse ou roda sobre a faixa de horas -->
       <div class="seg" id="zoom-seg">
+        <button data-z="day" onclick="setZoom('day')" title="O dia inteiro na tela">Dia todo</button>
         <button data-z="60" onclick="setZoom(60)">Hora</button>
         <button data-z="30" onclick="setZoom(30)">30 min</button>
         <button data-z="15" onclick="setZoom(15)">15 min</button>
+        <button data-z="5" onclick="setZoom(5)">5 min</button>
+        <button data-z="1" onclick="setZoom(1)">1 min</button>
+      </div>
+      <div class="zoom-ctl">
+        <button class="btn btn-ghost btn-sm" onclick="zoomBy(1 / 1.4)" aria-label="Diminuir o zoom" title="Diminuir o zoom">−</button>
+        <input type="range" id="zoom-range" min="0" max="1000" step="1" oninput="zoomFromSlider(+this.value)" aria-label="Zoom da linha do tempo">
+        <button class="btn btn-ghost btn-sm" onclick="zoomBy(1.4)" aria-label="Aumentar o zoom" title="Aumentar o zoom">+</button>
+        <span class="hint" id="zoom-info"></span>
       </div>
       <button class="btn btn-ghost btn-sm" onclick="scrollToNow()">Ir para agora</button>
       <span class="save-state" id="save-state"></span>
+      <span class="hint zoom-tip">🖱 Ctrl + roda do mouse (ou só a roda sobre a faixa de horas) muda o zoom · arraste a faixa de horas para os lados</span>
     </div>
 
     <div class="tl-layout">
@@ -554,7 +576,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
             <div class="section-title" style="margin-bottom:10px">Como a TV decide o que exibir</div>
             <p style="margin-bottom:6px">Primeiro, a régua do dia: <b>exceção da data</b> (Calendário) &gt; <b>régua do dia da semana</b> &gt; <b>Todos os dias</b>. Depois, dentro dela:</p>
             <ol>
-              <li><b>Item avulso</b> no horário: a TV mostra só ele e a playlist da base fica pausada.</li>
+              <li><b>Item avulso</b> no horário: a TV mostra só ele (alternando com os 📣 avisos do dia, se houver) e a playlist da base fica pausada.</li>
               <li>Senão, a <b>playlist</b> agendada no horário.</li>
               <li>Fora de qualquer bloco: a <b>Playlist padrão</b>.</li>
             </ol>
@@ -1697,15 +1719,24 @@ function closePreview() { $('pv-overlay').hidden = true; $('pv-body').innerHTML 
 // start/end em minutos do dia (0 a 1440). A trilha é definida pelo tipo:
 // playlists sempre na trilha base, itens sempre na trilha de sobreposição.
 // Todo arraste/edição altera TL.blocks e agenda o salvamento (PUT /api/schedule).
-const PXH = {60: 90, 30: 180, 15: 360};          // pixels por hora em cada zoom
-const TL = {zoom: +(store.get('av_zoom') || 60), blocks: [], sel: null, saveTimer: null, loaded: false,
+// ZOOM CONTÍNUO (0.11.0). TL.pxh = pixels por hora (qualquer valor entre "o dia todo na tela" e
+// PXH_MAX). TL.zoom = passo da grade em minutos, escolhido sozinho a partir do zoom (zoomStep):
+// é o espaçamento das marcas da régua e o encaixe dos blocos ao arrastar (1, 5, 10, 15, 30 min...).
+const PXH = {60: 90, 30: 180, 15: 360, 5: 1080, 1: 3600};   // atalhos: pixels por hora de cada um
+const PXH_MAX = 3600;                                        // 1 min = 60 px
+const ZOOM_STEPS = [1, 5, 10, 15, 30, 60, 120, 180, 240];   // passos possíveis da grade, em minutos
+const TL = {zoom: 60, pxh: +(store.get('av_pxh') || PXH[store.get('av_zoom')] || 90),
+            blocks: [], sel: null, saveTimer: null, loaded: false,
             // régua em edição (0.11.0): custom = tem versão própria; inherits = a régua que vale no lugar dela
             scope: /^(all|wd:[1-7])$/.test(store.get('av_scope') || '') ? store.get('av_scope') : 'all',
             custom: true, inherits: null, inheritsLabel: '', rulers: new Set()};
-if (!PXH[TL.zoom]) TL.zoom = 60;
-const ppm = () => PXH[TL.zoom] / 60;              // pixels por minuto
+const ppm = () => TL.pxh / 60;                    // pixels por minuto
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const snap = m => Math.round(m / TL.zoom) * TL.zoom; // encaixe na grade do zoom
+const snapStep = () => Math.min(TL.zoom, 60);     // com o dia todo na tela, encaixa de hora em hora
+const snap = m => Math.round(m / snapStep()) * snapStep(); // encaixe na grade do zoom
+// Menor passo cujas marcas ficam a pelo menos 56 px uma da outra (cabe o rótulo "12:30").
+const zoomStep = pxh => ZOOM_STEPS.find(s => s * pxh / 60 >= 56) || 240;
+TL.zoom = zoomStep(TL.pxh);
 const fmt = m => m >= 1440 ? '24:00' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const nowMin = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
 
@@ -1771,9 +1802,11 @@ function renderRuler() {
 }
 
 function renderTimeline() {
+  // Zoom salvo num monitor menor pode ficar abaixo do "dia todo" deste: ajusta (só com a aba visível)
+  if ($('tl-scroll').clientWidth && TL.pxh < pxhMin()) { TL.pxh = pxhMin(); TL.zoom = zoomStep(TL.pxh); }
   const W = 1440 * ppm();
   $('tl-canvas').style.width = W + 'px';
-  document.querySelectorAll('#zoom-seg button').forEach(b => b.classList.toggle('active', +b.dataset.z === TL.zoom));
+  renderZoomCtl();
   renderRuler();
   const conflicts = computeConflicts();
   const bad = new Set(conflicts.filter(c => !c.nested).flatMap(c => [c.a.id, c.b.id]));
@@ -1786,7 +1819,7 @@ function renderTimeline() {
     const trackH = count > 1 ? 18 + count * 34 - 4 : 76;
     trk.style.height = $('lbl-' + kind).style.height = trackH + 'px';
     trk.style.setProperty('--hour', 60 * ppm() + 'px');
-    trk.style.setProperty('--step', TL.zoom * ppm() + 'px');
+    trk.style.setProperty('--step', snapStep() * ppm() + 'px');
     trk.innerHTML = '';
     kb.forEach(b => {
       const el = document.createElement('div');
@@ -1836,7 +1869,7 @@ function attachBlockDrag(el, b) {
     const mode = e.target.dataset.h || 'move';
     selectBlock(b.id);
     const x0 = e.clientX, s0 = b.start_min, e0 = b.end_min, len = e0 - s0;
-    const minLen = Math.min(TL.zoom, len);
+    const minLen = Math.min(snapStep(), len);
     let moved = false;
     el.setPointerCapture(e.pointerId);
     const move = ev => {
@@ -2034,13 +2067,69 @@ function scrollToNow() {
   sc.scrollLeft = Math.max(0, nowMin() * ppm() - sc.clientWidth / 3);
 }
 
-function setZoom(z) {
-  const sc = $('tl-scroll');
-  const center = (sc.scrollLeft + sc.clientWidth / 2) / ppm();
-  TL.zoom = z; store.set('av_zoom', z);
+// Limites do zoom: de "o dia inteiro cabe na área visível" até 1 min = 60 px.
+function pxhMin() { const w = $('tl-scroll').clientWidth; return Math.max(12, (w || 960) / 24); }
+const pxhOf = z => z === 'day' ? pxhMin() : PXH[z];
+
+// Aplica um zoom mantendo parado o minuto que está sob `anchorX` (posição do mouse na tela);
+// sem `anchorX`, mantém o centro da área visível.
+function applyZoom(pxh, anchorX) {
+  const sc = $('tl-scroll'), r = sc.getBoundingClientRect();
+  const off = anchorX == null ? sc.clientWidth / 2 : clamp(anchorX - r.left, 0, sc.clientWidth);
+  const minute = (sc.scrollLeft + off) / ppm();
+  TL.pxh = clamp(pxh, pxhMin(), PXH_MAX);
+  TL.zoom = zoomStep(TL.pxh);
+  store.set('av_pxh', Math.round(TL.pxh));
   renderTimeline();
-  sc.scrollLeft = Math.max(0, center * ppm() - sc.clientWidth / 2);
+  sc.scrollLeft = Math.max(0, minute * ppm() - off);
 }
+function setZoom(z) { applyZoom(pxhOf(z)); }
+function zoomBy(f, anchorX) { applyZoom(TL.pxh * f, anchorX); }
+
+// Barra deslizante em escala logarítmica (cada trecho da barra multiplica o zoom pelo mesmo fator).
+function zoomFromSlider(v) {
+  const lo = pxhMin(); applyZoom(lo * Math.pow(PXH_MAX / lo, v / 1000));
+}
+function renderZoomCtl() {
+  const lo = pxhMin();
+  $('zoom-range').value = Math.round(Math.log(TL.pxh / lo) / Math.log(PXH_MAX / lo) * 1000);
+  document.querySelectorAll('#zoom-seg button').forEach(b => {
+    const z = b.dataset.z === 'day' ? 'day' : +b.dataset.z;
+    b.classList.toggle('active', Math.abs(pxhOf(z) / TL.pxh - 1) < 0.03);
+  });
+  $('zoom-info').textContent = `grade de ${TL.zoom >= 60 ? TL.zoom / 60 + ' h' : TL.zoom + ' min'}`;
+}
+
+// Roda do mouse: Ctrl + roda em qualquer ponto da linha do tempo (a "pinça" do touchpad também
+// chega assim), ou a roda sozinha sobre a faixa de horas. Sem Ctrl e fora da faixa, a página rola normal.
+// Vários eventos seguidos são juntados num só desenho por quadro (requestAnimationFrame).
+let wheelAcc = 0, wheelX = 0, wheelRaf = 0;
+$('tl-scroll').addEventListener('wheel', e => {
+  if (!e.ctrlKey && !e.target.closest('#ruler')) return;
+  e.preventDefault();   // impede o zoom da página do navegador
+  wheelAcc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;   // linhas → pixels (Firefox)
+  wheelX = e.clientX;
+  if (!wheelRaf) wheelRaf = requestAnimationFrame(() => {
+    zoomBy(Math.exp(-wheelAcc * 0.0018), wheelX);   // ~20% por "clique" da roda
+    wheelAcc = 0; wheelRaf = 0;
+  });
+}, {passive: false});
+
+// Arrastar a faixa de horas para os lados rola a linha do tempo.
+$('ruler').addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  const sc = $('tl-scroll'), x0 = e.clientX, s0 = sc.scrollLeft, ru = $('ruler');
+  ru.setPointerCapture(e.pointerId); ru.classList.add('panning');
+  const move = ev => { sc.scrollLeft = s0 - (ev.clientX - x0); };
+  const up = () => {
+    ru.classList.remove('panning');
+    ru.removeEventListener('pointermove', move); ru.removeEventListener('pointerup', up); ru.removeEventListener('pointercancel', up);
+  };
+  ru.addEventListener('pointermove', move); ru.addEventListener('pointerup', up); ru.addEventListener('pointercancel', up);
+});
+// Janela menor: o zoom mínimo ("dia todo") muda junto.
+addEventListener('resize', () => { if (!$('tab-schedule').hidden && TL.pxh < pxhMin()) applyZoom(pxhMin()); });
+
 
 // Salvamento automático: espera 400 ms sem novas mudanças e envia a grade inteira.
 function setSave(msg, err) { const s = $('save-state'); s.textContent = msg; s.classList.toggle('err', !!err); }
