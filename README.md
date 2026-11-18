@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.7.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.10.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -108,7 +108,9 @@ Alava Vision/
 ├── instalar.bat           Instalação no PC da TV (bibliotecas, .env, início com o Windows)
 ├── atualizar.bat          Fecha, baixa a versão nova (git pull) e reabre
 ├── startup.bat            Liga/desliga o início automático com o Windows
-├── ferramentas/           configurar.py (.env interativo) e parar_alava_vision.ps1 (usado pelo atualizar)
+├── ferramentas/           configurar.py (.env interativo), instalar_voz.py (Piper + vozes; instala em ferramentas/piper/)
+│                          e parar_alava_vision.ps1 (usado pelo atualizar)
+├── conteudo/              datas_comemorativas.txt (lista padrão; a editável fica em data/)
 ├── static/index.html      Painel administrativo
 ├── static/weather.html    Tela de clima (relógio, 7 dias, céu animado, alertas INMET); abre já com a previsão
 ├── static/fonts/          Fonte Inter local usada na TV
