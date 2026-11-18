@@ -28,6 +28,8 @@
       contador regressivo .......... #cfg-countdown (#f-cd-*), fmtDateTime()
       mensagem (fundo, fonte...) ... #cfg-message (#f-msg-*), setMsgForm(), getMsgConfig(), msgModeChanged(),
                                      GRAD_PRESETS; prévia ao vivo #msg-live, msgPreviewSoon() → /view/message-preview
+      notícias (RSS) ............... #cfg-news, NEWS_FEEDS, NEWS_BLOCK_DEFAULT, setNewsForm(), getNewsConfig(),
+                                     testNews() → POST /api/news-test
       buscar imagens na web ........ #img-picker, openImagePicker(), runImageSearch(), pickImage()
                                      → GET /api/image-search, POST /api/image-import (nome do item obrigatório)
     Pré-visualização ............... #pv-overlay, .pv-screen, .pv-media, openPreview(), fitFrame()
@@ -155,6 +157,9 @@ button,input,select,textarea{font-family:inherit}
 .badge-message{background:color-mix(in srgb,#22c55e 15%,transparent);color:#16a34a}
 .badge-html{background:color-mix(in srgb,#ef4444 15%,transparent);color:#dc2626}
 .badge-countdown{background:color-mix(in srgb,#14b8a6 15%,transparent);color:#0d9488}
+.badge-news{background:color-mix(in srgb,#65a30d 15%,transparent);color:#4d7c0f}
+.feed-list{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}
+.news-test{font-size:12px;color:var(--soft);line-height:1.5;white-space:pre-line}
 .check-line{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px}
 /* Mensagem: prévia ao vivo, seções, seletor de fundo, degradês prontos */
 .msg-live{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#000;border:1px solid var(--border)}
@@ -506,6 +511,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <button class="type-tab" data-type="message" onclick="setType('message')">💬 Mensagem</button>
           <button class="type-tab" data-type="countdown" onclick="setType('countdown')">⏳ Contador</button>
           <button class="type-tab" data-type="html" onclick="setType('html')">📄 HTML local</button>
+          <button class="type-tab" data-type="news" onclick="setType('news')">📰 Notícias</button>
         </div>
       </div>
 
@@ -549,6 +555,25 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <div id="html-drop-text">📁 Clique ou arraste a página aqui<br><span class="hint">.html (página única) ou .zip (página com CSS, imagens e scripts)</span></div>
         </label>
         <p class="hint">No .zip, a página inicial é o <b>index.html</b>. Links relativos (ex.: <code>css/estilo.css</code>) funcionam normalmente.</p>
+      </div>
+
+      <div id="cfg-news" hidden class="form-group" style="gap:12px">
+        <div class="form-group"><label for="f-news-title">Título da tela</label><input type="text" id="f-news-title" placeholder="Notícias"></div>
+        <div class="form-group"><label>Fontes</label><div class="feed-list" id="feed-list"></div>
+          <p class="hint">g1 Últimas e g1 Rio trazem bastante notícia policial. Para a TV do escritório, BBC, Economia e InfoMoney costumam funcionar melhor.</p></div>
+        <div class="form-group"><label for="f-news-extra">Outros feeds RSS <span class="hint">(um endereço por linha)</span></label>
+          <textarea id="f-news-extra" rows="2" placeholder="https://exemplo.com.br/rss"></textarea></div>
+        <div class="row3">
+          <div class="form-group"><label for="f-news-per">Segundos por manchete</label><input type="number" id="f-news-per" value="9" min="4" max="60"></div>
+          <div class="form-group"><label for="f-news-max">Máximo de manchetes</label><input type="number" id="f-news-max" value="15" min="1" max="60"></div>
+          <div class="form-group"><label for="f-news-accent">Cor de destaque</label><input type="color" id="f-news-accent" value="#38bdf8"></div>
+        </div>
+        <label class="check-line"><input type="checkbox" id="f-news-img" checked> Mostrar a foto da notícia</label>
+        <div class="form-group"><label for="f-news-block">Ocultar notícias com estas palavras <span class="hint">(separadas por vírgula)</span></label>
+          <textarea id="f-news-block" rows="2"></textarea></div>
+        <div class="inline"><button class="btn btn-ghost" type="button" onclick="testNews()">Testar feeds</button></div>
+        <div class="news-test" id="news-test"></div>
+        <p class="hint">A TV mostra uma manchete por vez. Na próxima vez que o item entrar, continua da manchete em que parou.</p>
       </div>
 
       <div id="cfg-countdown" hidden class="form-group" style="gap:12px">
@@ -722,9 +747,9 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const uid = () => Math.random().toString(16).slice(2, 14).padEnd(12, '0');
-const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬',countdown:'⏳',html:'📄'};
-const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem',countdown:'Contador',html:'HTML local'};
-const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e',countdown:'#14b8a6',html:'#ef4444'};
+const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬',countdown:'⏳',html:'📄',news:'📰'};
+const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem',countdown:'Contador',html:'HTML local',news:'Notícias'};
+const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e',countdown:'#14b8a6',html:'#ef4444',news:'#65a30d'};
 const ALL_TYPES = Object.keys(TYPE_NAMES);
 const PL_COLOR = '#6366f1';
 const store = {
@@ -880,6 +905,7 @@ function itemMeta(item) {
   if (item.type === 'video') return esc((c.url || '').split('/').pop()) + (c.loop === false ? ' · toca uma vez' : ' · repete');
   if (item.type === 'html') return esc(c.file || (c.url || '').split('/').pop());
   if (item.type === 'countdown') return esc(c.title || '') + (c.target ? ` · até ${esc(fmtDateTime(c.target))}` : '');
+  if (item.type === 'news') return esc((c.feeds || []).map(u => NEWS_FEEDS.find(f => f.url === u)?.name || new URL(u).hostname).join(', '));
   return '';
 }
 
@@ -1038,8 +1064,64 @@ function openEdit(id) {
     $('f-cd-hide').checked = !!c.hide_after;
   }
   if (item.type === 'message') setMsgForm(c);
+  if (item.type === 'news') setNewsForm(c);
   $('modal').hidden = false;
   if (item.type === 'message') msgPreviewSoon();
+}
+
+// ─── Notícias (RSS) ───────────────────────────────────────────────────────────
+// Feeds testados em 18/11/2026. Qualquer outro RSS/Atom pode ir em "Outros feeds".
+const NEWS_FEEDS = [
+  {name: 'g1 — Últimas', url: 'https://g1.globo.com/rss/g1/'},
+  {name: 'g1 — Rio de Janeiro', url: 'https://g1.globo.com/rss/g1/rio-de-janeiro/'},
+  {name: 'g1 — Economia', url: 'https://g1.globo.com/rss/g1/economia/'},
+  {name: 'Agência Brasil', url: 'https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml'},
+  {name: 'BBC News Brasil', url: 'https://feeds.bbci.co.uk/portuguese/rss.xml'},
+  {name: 'ge — Esportes', url: 'https://ge.globo.com/rss/ge/'},
+  {name: 'InfoMoney', url: 'https://www.infomoney.com.br/feed/'},
+];
+// Lista inicial do filtro (só para itens novos; dá para apagar ou completar no formulário).
+// Cada palavra vale como início de palavra ("tortur" pega "tortura" e "torturar").
+// "mata" ficou de fora de propósito: bloquearia "Mata Atlântica".
+const NEWS_BLOCK_DEFAULT = 'morte, morre, morreu, morto, morta, matar, matou, mataram, assassin, homicídio, feminicídio, ' +
+  'latrocínio, estupr, abuso sexual, tortur, tragédia, massacre, chacina, suicíd, tiroteio, baleado, bala perdida, ' +
+  'esfaque, sequestr, cadáver, corpo encontrado, acidente fatal, ' +
+  'preso, presa, presos, agred, cárcere, tráfico de drogas, roubo, assalt, facção, miliciano';
+$('feed-list').innerHTML = NEWS_FEEDS.map((f, i) =>
+  `<label class="check-line"><input type="checkbox" data-feed="${i}"> ${esc(f.name)}</label>`).join('');
+
+function setNewsForm(c) {
+  // Padrão: BBC + g1 Economia, que no teste trouxeram bem menos notícia policial que g1 Últimas/Rio.
+  const feeds = c.feeds || [NEWS_FEEDS[4].url, NEWS_FEEDS[2].url];
+  document.querySelectorAll('[data-feed]').forEach(cb => cb.checked = feeds.includes(NEWS_FEEDS[cb.dataset.feed].url));
+  $('f-news-extra').value = feeds.filter(u => !NEWS_FEEDS.some(f => f.url === u)).join('\n');
+  $('f-news-title').value = c.title || '';
+  $('f-news-per').value = c.per_headline || 9;
+  $('f-news-max').value = c.max_items || 15;
+  $('f-news-accent').value = c.accent || '#38bdf8';
+  $('f-news-img').checked = c.show_images !== false;
+  $('f-news-block').value = c.block_words ?? NEWS_BLOCK_DEFAULT;
+  $('news-test').textContent = '';
+}
+function getNewsConfig() {
+  const feeds = [...document.querySelectorAll('[data-feed]:checked')].map(cb => NEWS_FEEDS[cb.dataset.feed].url)
+    .concat($('f-news-extra').value.split('\n').map(normalizeUrl).filter(Boolean));
+  return {
+    feeds: [...new Set(feeds)], title: $('f-news-title').value.trim(),
+    per_headline: parseInt($('f-news-per').value) || 9, max_items: parseInt($('f-news-max').value) || 15,
+    accent: $('f-news-accent').value, show_images: $('f-news-img').checked, block_words: $('f-news-block').value,
+  };
+}
+async function testNews() {
+  const cfg = getNewsConfig();
+  if (!cfg.feeds.length) { status('Escolha pelo menos uma fonte', 'err'); return; }
+  $('news-test').textContent = 'Testando…';
+  try {
+    const r = await api('POST', '/api/news-test', cfg);
+    $('news-test').textContent = `✔ ${r.items.length} manchete(s) depois do filtro.` +
+      (r.items.length ? '\nMais recentes:\n' + r.items.slice(0, 3).map(i => '• ' + i.title).join('\n') : '') +
+      (r.errors.length ? '\n⚠ Não consegui ler: ' + r.errors.join(' | ') : '');
+  } catch(e) { $('news-test').textContent = '⚠ ' + e.message; }
 }
 
 // ─── Mensagem: formulário ↔ config ───────────────────────────────────────────
@@ -1184,9 +1266,10 @@ function setType(t) {
   document.querySelectorAll('.type-tab').forEach(b => b.classList.toggle('active', b.dataset.type === t));
   showCfgPanel(t);
   const names = {url:'Site', image:'Imagem', video:'Vídeo', weather:'Previsão do Tempo', traffic:'Trânsito',
-                 message:'Mensagem', countdown:'Contador regressivo', html:'Página HTML'};
+                 message:'Mensagem', countdown:'Contador regressivo', html:'Página HTML', news:'Notícias'};
   if (!$('f-name').value || Object.values(names).includes($('f-name').value)) $('f-name').value = names[t];
-  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30}[t] || 30;
+  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30, news:45}[t] || 30;
+  if (t === 'news') setNewsForm({});
   if (t === 'message') msgPreviewSoon();
 }
 
@@ -1216,6 +1299,9 @@ async function saveItem() {
     else if (editId) config = {...(items.find(i => i.id === editId)?.config || {})};
     else { status('Selecione um arquivo', 'err'); return; }
     if (currentType === 'video') config.loop = $('f-vid-loop').checked;
+  } else if (currentType === 'news') {
+    config = getNewsConfig();
+    if (!config.feeds.length) { status('Escolha pelo menos uma fonte de notícias', 'err'); return; }
   } else if (currentType === 'countdown') {
     const target = $('f-cd-target').value;
     if (!target) { status('Informe a data e a hora do evento', 'err'); return; }

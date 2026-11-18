@@ -64,6 +64,9 @@ MAPA DO CÓDIGO
                                       /view/traffic, /view/message/{id},
                                       /view/html/{id} (redireciona para /html/...), /view/countdown/{id}
       vídeo repetir ou não .......... view_video(): config.loop (padrão True)
+      notícias (RSS) ................ /view/news/{id}, GET /api/news/{id}, POST /api/news-test,
+                                      get_news() (filtro, sem repetidas), _fetch_feed() (cache NEWS_TTL),
+                                      _parse_feed() (RSS e Atom), _warm_news() (em 2º plano, com o clima)
       mensagem ...................... view_message() e view_message_preview() → _render_message()
                                       (fundo sólido/degradê/imagem, MSG_FONTS, MSG_ANIMS, _css_color())
     Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
@@ -705,6 +708,161 @@ async def image_import(request: Request):
     return {"url": f"/uploads/{fname}", "type": "image"}
 
 
+# ─── Notícias (RSS / Atom) ────────────────────────────────────────────────────
+#
+# Item "news": config.feeds = lista de endereços RSS/Atom. O servidor baixa cada feed
+# (cache de 10 min por endereço, em paralelo), junta, tira repetidas e as que têm
+# palavras de config.block_words, ordena da mais nova para a mais antiga e entrega até
+# config.max_items manchetes para a tela /view/news/{id}.
+
+NEWS_TTL = 600
+_news_cache: dict[str, tuple[float, list[dict]]] = {}   # url → (quando, manchetes)
+# Nome exibido da fonte quando o título do canal não ajuda (ex.: Agência Brasil manda "Feed Últimas")
+NEWS_SOURCE_NAMES = {"agenciabrasil.ebc.com.br": "Agência Brasil", "feeds.bbci.co.uk": "BBC News Brasil",
+                     "www.infomoney.com.br": "InfoMoney"}
+
+
+def _local(tag: str) -> str:
+    """'{http://search.yahoo.com/mrss/}content' → 'content'."""
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _strip_html(s: str) -> str:
+    import re
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    return " ".join(html.unescape(s).split())
+
+
+def _parse_feed(data: bytes, url: str) -> list[dict]:
+    import re
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    root = ET.fromstring(data)
+    source = ""
+    for el in root.iter():   # título do canal = nome da fonte
+        if _local(el.tag) == "title" and (el.text or "").strip():
+            source = _strip_html(el.text)
+            break
+    out = []
+    for it in root.iter():
+        if _local(it.tag) not in ("item", "entry"):
+            continue
+        f = {"title": "", "summary": "", "image": "", "ts": 0.0, "link": ""}
+        for ch in it:
+            name, text = _local(ch.tag), (ch.text or "").strip()
+            if name == "title":
+                f["title"] = _strip_html(text)
+            elif name in ("subtitle", "summary") and not f["summary"]:
+                f["summary"] = _strip_html(text)
+            elif name == "description":
+                if not f["image"]:
+                    m = re.search(r'<img[^>]+src=["\']([^"\']+)', html.unescape(text))
+                    if m:
+                        f["image"] = m.group(1)
+                f["_desc"] = _strip_html(text)
+            elif name in ("content", "thumbnail") and ch.get("url") and ch.get("medium", "image") == "image":
+                f["image"] = f["image"] if name == "thumbnail" and f["image"] else ch.get("url")
+            elif name == "enclosure" and str(ch.get("type", "")).startswith("image") and not f["image"]:
+                f["image"] = ch.get("url", "")
+            elif name == "imagem-destaque" and text:
+                f["image"] = text
+            if "ichef.bbci.co.uk" in f["image"]:   # a BBC manda miniatura de 240 px; pede 800 px
+                f["image"] = f["image"].replace("/ws/240/", "/ws/800/")
+            elif name in ("pubDate", "published", "updated") and not f["ts"]:
+                try:
+                    f["ts"] = parsedate_to_datetime(text).timestamp()
+                except (TypeError, ValueError):
+                    try:
+                        f["ts"] = datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+                    except ValueError:
+                        pass
+            elif name == "link":
+                f["link"] = text or ch.get("href", "")
+        if not f["summary"]:
+            f["summary"] = f.get("_desc", "")
+        f.pop("_desc", None)
+        if len(f["summary"]) > 240:
+            f["summary"] = f["summary"][:237].rsplit(" ", 1)[0] + "…"
+        if f["title"]:
+            host = urllib.parse.urlparse(url).hostname or ""
+            f["source"] = NEWS_SOURCE_NAMES.get(host) or source or host
+            out.append(f)
+    return out
+
+
+def _fetch_feed(url: str, force: bool = False) -> list[dict]:
+    hit = _news_cache.get(url)
+    if hit and not force and time.time() - hit[0] < NEWS_TTL:
+        return hit[1]
+    import gzip
+    req = urllib.request.Request(url, headers={"User-Agent": "AlavaVision/1.0", "Accept-Encoding": "identity"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = r.read(5 * 1024 * 1024)
+        if data[:2] == b"\x1f\x8b":          # alguns servidores mandam gzip mesmo sem pedir
+            data = gzip.decompress(data)
+        items = _parse_feed(data.lstrip(b"\xef\xbb\xbf \t\r\n"), url)
+    except Exception:
+        if hit:                  # sem internet: usa o que tinha
+            return hit[1]
+        raise
+    _news_cache[url] = (time.time(), items)
+    return items
+
+
+def get_news(cfg: dict, force: bool = False) -> dict:
+    import re
+    from concurrent.futures import ThreadPoolExecutor
+    feeds = [u.strip() for u in cfg.get("feeds", []) if str(u).strip().startswith(("http://", "https://"))][:12]
+    # Cada palavra vale como INÍCIO de palavra: "assassin" pega "assassinato", mas
+    # "morta" não pega "imortal" nem "comporta".
+    words = [w.strip().lower() for w in str(cfg.get("block_words", "")).split(",") if w.strip()]
+    block_re = re.compile(r"\b(" + "|".join(map(re.escape, words)) + ")") if words else None
+    max_items = _num(cfg.get("max_items"), 15, 1, 60)
+    items, errors = [], []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for url, res in zip(feeds, ex.map(lambda u: _try(_fetch_feed, u, force), feeds)):
+            if isinstance(res, Exception):
+                errors.append(f"{urllib.parse.urlparse(url).hostname}: {res}")
+            else:
+                items += res
+    # "VÍDEOS: Jornal da Manhã…" e "EPTV 1 Campinas ao vivo" (g1) são listas de vídeos e
+    # chamadas de transmissão: na TV viram um título sem conteúdo, então saem.
+    # "VÍDEO: cratera engole caminhão" (singular) é notícia de verdade: só perde o prefixo.
+    video_re = re.compile(r"^v[íi]deos\s*:|\bao vivo\s*$", re.I) if cfg.get("skip_videos", True) else None
+    for it in items:
+        it["title"] = re.sub(r"^v[íi]deo\s*:\s*", "", it["title"], flags=re.I)
+    seen, out = set(), []
+    for it in sorted(items, key=lambda x: -x["ts"]):
+        key = it["title"].lower()
+        text = (it["title"] + " " + it["summary"]).lower()
+        if key in seen or (block_re and block_re.search(text)) or (video_re and video_re.search(it["title"])):
+            continue
+        seen.add(key)
+        out.append(it)
+        if len(out) >= max_items:
+            break
+    return {"items": out, "errors": errors, "updated_at": datetime.now().strftime("%H:%M")}
+
+
+def _try(fn, *a):
+    try:
+        return fn(*a)
+    except Exception as e:
+        return e
+
+
+@app.get("/api/news/{item_id}")
+def api_news(item_id: str):
+    return get_news(_item_config(item_id))
+
+
+@app.post("/api/news-test", dependencies=[Depends(require_auth)])
+async def api_news_test(request: Request):
+    """Painel: testa os feeds digitados antes de salvar (mostra quantas manchetes e os erros)."""
+    return await asyncio.to_thread(get_news, await request.json())
+
+
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 app.mount("/html", StaticFiles(directory=str(HTML_DIR)), name="html")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
@@ -961,7 +1119,19 @@ def _weather_refresher():
                 _log_model_compare()
             except Exception as e:
                 print(f"[clima] falha ao gravar a comparação de modelos: {e}")
+        _warm_news()
         time.sleep(WX_REFRESH_EVERY)
+
+
+def _warm_news():
+    """Deixa as manchetes dos itens de notícias ativos em cache (a tela abre sem esperar a internet)."""
+    try:
+        with db() as con:
+            rows = con.execute("SELECT config FROM items WHERE type='news' AND active=1").fetchall()
+        for r in rows:
+            get_news(json.loads(r["config"] or "{}"), force=True)
+    except Exception as e:
+        print(f"[notícias] falha ao atualizar em segundo plano: {e}")
 
 
 # ─── Telas exibidas pelo player (e pela pré-visualização do painel) ──────────
@@ -1136,6 +1306,93 @@ function tick(){{const n=new Date();document.getElementById('clock').textContent
   String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');}}
 tick(); setInterval(tick, 1000);
 </script>""")
+
+
+@app.get("/view/news/{item_id}")
+def view_news(item_id: str):
+    """Tela de notícias: uma manchete por vez (foto + título + resumo), trocando a cada
+    config.per_headline segundos. Começa já com as manchetes embutidas (sem "Carregando…")
+    e atualiza sozinha a cada 5 min. Guarda no navegador da TV em qual manchete parou,
+    para a próxima vez que o item entrar continuar dali em vez de repetir as primeiras.
+    """
+    cfg = _item_config(item_id)
+    data = json.dumps(get_news(cfg), ensure_ascii=False).replace("</", "<\\/")
+    title = html.escape(str(cfg.get("title") or "Notícias"))
+    accent = _css_color(cfg.get("accent"), "#38bdf8")
+    per = _num(cfg.get("per_headline"), 9, 4, 60)
+    show_img = "true" if cfg.get("show_images", True) else "false"
+    return HTMLResponse(f"""<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5f9;font-family:'Segoe UI',system-ui,sans-serif}}
+.top{{position:fixed;top:0;left:0;right:0;height:11vh;display:flex;align-items:center;justify-content:space-between;padding:0 4vw}}
+.top h1{{font-size:3.4vh;font-weight:700;letter-spacing:.32em;text-transform:uppercase;color:{accent}}}
+.top .clock{{font-size:4.2vh;font-weight:300;font-variant-numeric:tabular-nums;opacity:.85}}
+.card{{position:fixed;top:13vh;bottom:12vh;left:4vw;right:4vw;display:grid;grid-template-columns:46% 1fr;gap:4vw;align-items:center;
+  transition:opacity .6s ease}}
+.card.noimg{{grid-template-columns:1fr}}
+.card.out{{opacity:0}}
+.pic{{width:100%;height:100%;border-radius:2.2vh;background:#1e293b center/cover no-repeat;box-shadow:0 3vh 7vh rgba(0,0,0,.45)}}
+.card.noimg .pic{{display:none}}
+.meta{{font-size:2.4vh;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:{accent};margin-bottom:2.6vh}}
+.headline{{font-size:6vh;font-weight:700;line-height:1.14;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}}
+.card.noimg .headline{{font-size:7.6vh}}
+.summary{{margin-top:3vh;font-size:3vh;line-height:1.4;color:#cbd5e1;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}}
+.bottom{{position:fixed;left:4vw;right:4vw;bottom:4.5vh;display:flex;align-items:center;gap:2vw;font-size:2.2vh;color:#94a3b8;
+  font-variant-numeric:tabular-nums}}
+.bar{{flex:1;height:.6vh;border-radius:1vh;background:rgba(148,163,184,.25);overflow:hidden}}
+.bar i{{display:block;height:100%;width:0;background:{accent}}}
+.empty{{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:4vh;color:#94a3b8;text-align:center}}
+</style></head>
+<body>
+<div class="top"><h1>{title}</h1><div class="clock" id="clock"></div></div>
+<div class="card" id="card"><div class="pic" id="pic"></div>
+  <div><div class="meta" id="meta"></div><div class="headline" id="headline"></div><div class="summary" id="summary"></div></div></div>
+<div class="bottom"><span id="count"></span><div class="bar"><i id="bar"></i></div></div>
+<script>
+let N = {data};
+const PER = {per} * 1000, SHOW_IMG = {show_img}, KEY = 'news-idx-{html.escape(item_id)}';
+const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2, '0');
+function tick() {{ const d = new Date(); $('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()); }}
+tick(); setInterval(tick, 1000);
+function ago(ts) {{
+  if (!ts) return '';
+  const m = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
+  if (m < 60) return m <= 1 ? 'agora' : `há ${{m}} min`;
+  const h = Math.round(m / 60); return h < 24 ? `há ${{h}} h` : `há ${{Math.round(h / 24)}} d`;
+}}
+let idx = 0;
+try {{ idx = parseInt(localStorage.getItem(KEY)) || 0; }} catch (e) {{}}
+function show() {{
+  const list = (N && N.items) || [];
+  if (!list.length) {{
+    document.body.insertAdjacentHTML('beforeend', '<div class="empty">Sem notícias no momento.<br>Confira os endereços dos feeds no painel.</div>');
+    $('card').hidden = true; return;
+  }}
+  idx %= list.length;
+  const it = list[idx];
+  $('card').classList.add('out');
+  setTimeout(() => {{
+    const img = SHOW_IMG && it.image;
+    $('card').classList.toggle('noimg', !img);
+    $('pic').style.backgroundImage = img ? `url("${{it.image.replace(/"/g, '%22')}}")` : '';
+    $('meta').textContent = [it.source, ago(it.ts)].filter(Boolean).join('  ·  ');
+    $('headline').textContent = it.title;
+    $('summary').textContent = it.summary;
+    $('count').textContent = `${{idx + 1}} / ${{list.length}}`;
+    const bar = $('bar'); bar.style.transition = 'none'; bar.style.width = '0';
+    requestAnimationFrame(() => requestAnimationFrame(() => {{ bar.style.transition = `width ${{PER}}ms linear`; bar.style.width = '100%'; }}));
+    $('card').classList.remove('out');
+    try {{ localStorage.setItem(KEY, (idx + 1) % list.length); }} catch (e) {{}}
+    idx++;
+  }}, 450);
+}}
+show(); setInterval(show, PER);
+setInterval(async () => {{ try {{ N = await (await fetch('/api/news/{html.escape(item_id)}')).json(); }} catch (e) {{}} }}, 300000);
+</script>
+</body></html>""", headers={"Cache-Control": "no-store"})
 
 
 MSG_FONTS = {   # fontes que já vêm no Windows (o PC da TV não precisa de internet para elas)

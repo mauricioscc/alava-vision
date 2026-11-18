@@ -16,6 +16,12 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
   - **Prévia ao vivo** no formulário, em escala de uma TV 1920×1080, que atualiza enquanto você edita (`/view/message-preview`).
 - **Buscar imagens na web** para o fundo da mensagem e para itens de imagem. A busca usa o **nome do item**, que é obrigatório antes de pesquisar. Com `PEXELS_API_KEY` no `.env`, usa o Pexels (fotos profissionais, chave gratuita); sem chave, o Openverse (sem cadastro, só licenças que permitem uso comercial e sem conteúdo sensível). A imagem escolhida é baixada para `data/uploads/`, então a TV mostra mesmo sem internet. O crédito do autor aparece discreto no canto inferior direito.
 - `PEXELS_API_KEY` no `.env.example`.
+- **Notícias (RSS)** (📰 Notícias): item próprio da playlist que mostra uma manchete por vez, com foto, fonte, "há X min", resumo e barra de tempo. Na próxima vez que o item entra, continua da manchete em que parou.
+  - 7 fontes prontas, testadas em 18/11/2026: g1 Últimas, g1 Rio, g1 Economia, Agência Brasil, BBC News Brasil, ge e InfoMoney. Aceita qualquer outro feed RSS ou Atom. Padrão: BBC + g1 Economia, que no teste trouxeram bem menos notícia policial.
+  - **Filtro de palavras** (cada palavra vale como início de palavra: "tortur" pega "tortura", "morta" não pega "imortal"), já preenchido nos itens novos com termos de crimes e tragédias. A lista é editável.
+  - Listas de vídeos ("VÍDEOS: …") e chamadas "ao vivo" do g1 são ignoradas; "VÍDEO:" no singular só perde o prefixo.
+  - Botão **Testar feeds** no formulário: mostra quantas manchetes passam pelo filtro, as 3 mais recentes e quais feeds falharam.
+  - Cache de 10 min por feed e atualização em segundo plano junto com o clima, então a tela abre sem esperar a internet. Sem internet, mostra as últimas manchetes baixadas. Um feed fora do ar não derruba os outros.
 
 #### Alterado
 - O texto da mensagem agora é exibido como texto puro. Antes, um `<b>` digitado era interpretado como HTML; agora aparece literalmente. Para páginas com HTML, use o widget **HTML local**.
