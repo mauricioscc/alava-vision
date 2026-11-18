@@ -7,5 +7,5 @@ if exist ".env" for /f "usebackq tokens=1,* delims==" %%a in (".env") do if /i "
 set "PORT=%PORT: =%"
 echo Iniciando Alava Vision na porta %PORT%...
 pip install -r requirements.txt -q
-python -m uvicorn server:app --host 0.0.0.0 --port %PORT% --reload
+python -m uvicorn server:app --app-dir "%~dp0." --host 0.0.0.0 --port %PORT% --reload
 pause

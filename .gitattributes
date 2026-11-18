@@ -1,0 +1,4 @@
+# Arquivos do Windows sempre com quebra de linha CRLF, em qualquer configuracao do Git.
+# (O cmd executa errado goto/labels em .bat com quebra LF.)
+*.bat text eol=crlf
+*.ps1 text eol=crlf
