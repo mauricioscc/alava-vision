@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.6.0
+Alava Vision — Servidor (server.py) · versão 0.6.2
 
 COMO RODAR
     pip install -r requirements.txt
@@ -35,6 +35,7 @@ MAPA DO CÓDIGO
                                       GET /api/weather
       atualização em 2º plano ....... _weather_refresher() (a cada 9 min, iniciada em startup())
       previsão embutida na tela ..... view_weather() troca WX_DATA_MARK pelo JSON do cache
+      status do INMET ............... get_weather() define w["inmet_status"]: "ok" | "unavailable" | "disabled"
     Telas exibidas pelo player ...... /view/image/{id}, /view/video/{id}, /view/weather,
                                       /view/traffic, /view/message/{id}
     Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
@@ -597,9 +598,12 @@ def get_weather(force: bool = False) -> dict:
         raise HTTPException(502, f"Falha ao obter previsão: {e}")
     try:
         alerts = _inmet_alerts(ibge)
+        inmet_status = "ok"
     except Exception:
         alerts = []
+        inmet_status = "unavailable"
     w["alerts"] = sorted(alerts, key=lambda a: SEV_ORDER.get(a["severity"], 9))
+    w["inmet_status"] = inmet_status if ibge else "disabled"
     w["updated_at"] = datetime.now().strftime("%H:%M")
     _wx_cache.update(t=now, key=key, data=w)
     return w
