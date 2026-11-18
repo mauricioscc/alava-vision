@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.10.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.11.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,6 +9,7 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.10.0 (antes do calendário): git checkout 8c60d7f -- static/index.html server.py
     Para a 0.8.1 (antes dos widgets de HTML e contador): git checkout 3ac5a57 -- static/index.html
     Para a 0.2.0 (antes do Git): copie backup_v0.2.0_20261117/static/index.html por cima deste arquivo.
 
@@ -28,7 +29,7 @@
       contador regressivo .......... #cfg-countdown (#f-cd-*), fmtDateTime()
       mensagem (fundo, fonte...) ... #cfg-message (#f-msg-*), setMsgForm(), getMsgConfig(), msgModeChanged(),
                                      GRAD_PRESETS; prévia ao vivo #msg-live, msgPreviewSoon() → /view/message-preview
-      notícias (RSS) ............... #cfg-news, NEWS_FEEDS, NEWS_BLOCK_DEFAULT, setNewsForm(), getNewsConfig(),
+      notícias (RSS) ............... #cfg-news (#f-news-logo = logo Alava no cabeçalho), NEWS_FEEDS, NEWS_BLOCK_DEFAULT, setNewsForm(), getNewsConfig(),
                                      testNews() → POST /api/news-test
       voz da mensagem .............. #f-msg-speak, #f-msg-voice, #f-msg-rate, #f-msg-speak-text,
                                      refreshVoiceOptions(), listenMsg() → POST /api/tts-preview
@@ -43,7 +44,14 @@
       edição numérica .............. renderEditor(), applyTimes(), #tl-editor
       sobreposições ................ computeConflicts(), renderWarnings(), .blk.conflict
       indicador de horário atual ... #now-line, updateNowLine()
-      salvar ....................... scheduleSave(), saveSchedule()  → PUT /api/schedule
+      salvar ....................... scheduleSave(), saveSchedule(), flushSave()  → PUT /api/schedule {scope, blocks}
+      réguas por dia da semana ..... TL.scope ('all' | 'wd:1'..'wd:7' | 'date:AAAA-MM-DD'), .ruler-bar, #ruler-seg,
+                                     renderRulerBar(), setScope(), createRuler(), deleteRuler(), régua herdada (.blk.inh)
+      dias úteis / copiar .......... copyToWorkdays(), #copy-modal, openCopyModal(), copyRuler() → POST /api/schedule/copy
+      cor de cada playlist ......... PL_PALETTE, plColor()
+    Aba Calendário ................. #tab-calendar, CAL, loadCalendar() → GET /api/calendar, renderCalendar() (.cal-day,
+                                     .lvl-all/.lvl-weekday/.lvl-date), renderCalDay() (#cal-day), calCreateException(),
+                                     calRemoveException(), calAllDay(), goSchedule()
     Configurações .................. #tab-settings, loadSettings(), saveSettings()
       curiosidades e datas ......... #card-today (#s-today-*, #s-curio), saveCuriosities(), resetCuriosities()
       voz (instalar) ............... #card-voice, showVoiceStatus(), installVoice() → POST /api/tts-install
@@ -338,6 +346,71 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
   background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--text)}
 .warn.info{border-color:color-mix(in srgb,var(--warn) 55%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
 
+/* ── Réguas por dia da semana (0.11.0) ───────────────────────────────────── */
+.ruler-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px}
+.ruler-bar .seg button.own::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--warn);margin-left:6px;vertical-align:2px}
+.ruler-bar input[type=date]{width:auto;padding:5px 8px;font-size:13px}
+.ruler-banner{font-size:13px;color:var(--soft);line-height:1.5;padding:10px 14px;border-radius:8px;border:1px solid var(--border);
+  background:var(--card);margin-bottom:14px;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.ruler-banner.inh{border-color:color-mix(in srgb,var(--warn) 55%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+.ruler-banner b{color:var(--text)}
+.ruler-banner a{color:var(--accent)}
+.blk.inh{opacity:.45;cursor:default;border-style:dashed}
+.blk.inh .h{display:none}
+.copy-presets{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ── Calendário (0.11.0) ──────────────────────────────────────────────────── */
+/* Borda esquerda de cada dia = de onde vem a régua: cinza Todos os dias, azul dia da semana, laranja exceção */
+.cal-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.cal-toolbar h2{font-family:'Space Grotesk',sans-serif;font-size:18px;min-width:190px;text-align:center}
+.cal-legend{margin-left:auto;display:flex;gap:14px;font-size:12px;color:var(--soft);flex-wrap:wrap}
+.cal-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.cal-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.cal-wd{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);text-align:center;padding:4px 0;font-weight:600}
+.cal-day{--lv:var(--muted);text-align:left;min-height:104px;min-width:0;background:var(--card);border:1px solid var(--border);
+  border-left:3px solid var(--lv);border-radius:8px;padding:7px 8px;cursor:pointer;color:var(--text);
+  display:flex;flex-direction:column;gap:5px;font:inherit}
+.cal-day:hover{background:color-mix(in srgb,var(--accent) 6%,var(--card))}
+.cal-day.lvl-weekday{--lv:var(--accent)}
+.cal-day.lvl-date{--lv:var(--warn)}
+.cal-day.sel{outline:2px solid var(--accent);outline-offset:1px}
+.cal-day.past{opacity:.55}
+.cal-day.today .cd-n{background:var(--danger);color:#fff;border-radius:6px;padding:0 6px}
+.cal-blank{min-height:104px}
+.cd-top{display:flex;justify-content:space-between;align-items:center;gap:4px}
+.cd-n{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums}
+.cd-lvl{font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;color:var(--lv);
+  background:color-mix(in srgb,var(--lv) 14%,transparent);white-space:nowrap}
+.cd-hol{font-size:11px;color:var(--ok);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cd-bar,.cal-strip{position:relative;height:6px;border-radius:3px;background:var(--grid-strong);overflow:hidden;flex:none}
+.cd-bar span,.cal-strip span{position:absolute;top:0;bottom:0}
+.cd-bar span.it,.cal-strip span.it{top:45%}
+.cd-pls{display:flex;flex-wrap:wrap;gap:3px;min-width:0}
+.cd-pl{--c:#6366f1;font-size:10.5px;padding:1px 6px;border-radius:4px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  background:color-mix(in srgb,var(--c) 22%,transparent);border:1px solid color-mix(in srgb,var(--c) 60%,transparent)}
+.cd-def{font-size:10.5px;color:var(--muted)}
+#cal-day{position:sticky;top:76px}
+.cal-hol{font-size:13px;color:var(--ok);margin-bottom:6px}
+.cal-why{font-size:13px;color:var(--soft);line-height:1.5;margin:8px 0 12px}
+.cal-why b{color:var(--text)}
+.cal-strip{height:22px;border-radius:6px}
+.cal-strip i{position:absolute;top:0;bottom:0;border-left:1px solid var(--grid-strong)}
+.cal-hours{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+.cal-blocks{list-style:none;margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.cal-blocks li{display:flex;align-items:center;gap:8px;font-size:13px}
+.cal-blocks .dot{width:9px;height:9px;border-radius:3px;flex:none}
+.cal-blocks .tm{font-variant-numeric:tabular-nums;color:var(--soft);white-space:nowrap}
+.cal-blocks .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-actions{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)}
+.cal-actions .btn{justify-content:center}
+.cal-allday{display:flex;flex-direction:column;gap:6px;padding:10px 0}
+.cal-allday label{font-size:12.5px;color:var(--soft);margin:0}
+.cal-allday select{flex:1;min-width:0}
+@media(max-width:1100px){.cal-layout{grid-template-columns:1fr}#cal-day{position:static}}
+@media(max-width:700px){.cal-day,.cal-blank{min-height:60px;padding:5px}.cd-pls,.cd-hol,.cd-lvl{display:none}}
+
 /* Status */
 #status{position:fixed;bottom:20px;right:20px;padding:10px 16px;border-radius:8px;max-width:calc(100vw - 40px);
   font-size:13px;font-weight:500;pointer-events:none;z-index:200}
@@ -372,9 +445,10 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
   <nav class="nav">
     <button class="nav-btn active" onclick="showTab('playlists')" id="nb-playlists"><span class="ic">▶</span> Playlists</button>
     <button class="nav-btn" onclick="showTab('schedule')" id="nb-schedule"><span class="ic">◷</span> Programação</button>
+    <button class="nav-btn" onclick="showTab('calendar')" id="nb-calendar"><span class="ic">▦</span> Calendário</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.6.1</div>
+  <div class="sidebar-footer">Alava Vision · v0.11.0</div>
 </aside>
 
 <div class="main">
@@ -402,6 +476,18 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 
   <!-- ═══ Aba Programação (timeline) ═══ -->
   <div class="content" id="tab-schedule" hidden>
+    <!-- Régua em edição: Todos os dias, um dia da semana ou a exceção de uma data (0.11.0) -->
+    <div class="ruler-bar">
+      <span class="hint" style="color:var(--soft)">Régua</span>
+      <div class="seg" id="ruler-seg"></div>
+      <input type="date" id="ruler-date" title="Exceção de uma data específica" aria-label="Exceção de uma data"
+        onchange="if(this.value) setScope('date:' + this.value)">
+      <span style="flex:1"></span>
+      <button class="btn btn-ghost btn-sm" onclick="copyToWorkdays()" title="Copia esta régua para segunda, terça, quarta, quinta e sexta">↻ Repetir nos dias úteis</button>
+      <button class="btn btn-ghost btn-sm" onclick="openCopyModal()">Copiar para…</button>
+      <button class="btn btn-danger btn-sm" id="btn-del-ruler" onclick="deleteRuler()" hidden>Remover régua própria</button>
+    </div>
+    <div class="ruler-banner" id="ruler-banner"></div>
     <div class="tl-toolbar">
       <span class="hint" style="color:var(--soft)">Zoom</span>
       <div class="seg" id="zoom-seg">
@@ -444,6 +530,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <div class="card" id="tl-editor"></div>
           <div class="card rules">
             <div class="section-title" style="margin-bottom:10px">Como a TV decide o que exibir</div>
+            <p style="margin-bottom:6px">Primeiro, a régua do dia: <b>exceção da data</b> (Calendário) &gt; <b>régua do dia da semana</b> &gt; <b>Todos os dias</b>. Depois, dentro dela:</p>
             <ol>
               <li><b>Item avulso</b> no horário: a TV mostra só ele e a playlist da base fica pausada.</li>
               <li>Senão, a <b>playlist</b> agendada no horário.</li>
@@ -454,6 +541,26 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- ═══ Aba Calendário (0.11.0) ═══ -->
+  <div class="content" id="tab-calendar" hidden>
+    <div class="cal-toolbar">
+      <button class="btn btn-ghost btn-sm" onclick="calMove(-1)" aria-label="Mês anterior">‹</button>
+      <h2 id="cal-title"></h2>
+      <button class="btn btn-ghost btn-sm" onclick="calMove(1)" aria-label="Próximo mês">›</button>
+      <button class="btn btn-ghost btn-sm" onclick="calToday()">Hoje</button>
+      <div class="cal-legend">
+        <span><i style="background:var(--muted)"></i>Todos os dias</span>
+        <span><i style="background:var(--accent)"></i>Régua do dia da semana</span>
+        <span><i style="background:var(--warn)"></i>Exceção da data</span>
+        <span>🎉 Feriado nacional</span>
+      </div>
+    </div>
+    <div class="cal-layout">
+      <div class="cal-grid" id="cal-grid"></div>
+      <div class="card" id="cal-day"></div>
     </div>
   </div>
 
@@ -629,6 +736,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <div class="form-group"><label for="f-news-accent">Cor de destaque</label><input type="color" id="f-news-accent" value="#38bdf8"></div>
         </div>
         <label class="check-line"><input type="checkbox" id="f-news-img" checked> Mostrar a foto da notícia</label>
+        <label class="check-line"><input type="checkbox" id="f-news-logo" checked> Mostrar a logo da Alava no cabeçalho</label>
         <div class="form-group"><label for="f-news-block">Ocultar notícias com estas palavras <span class="hint">(separadas por vírgula)</span></label>
           <textarea id="f-news-block" rows="2"></textarea></div>
         <div class="inline"><button class="btn btn-ghost" type="button" onclick="testNews()">Testar feeds</button></div>
@@ -790,6 +898,25 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
   </div>
 </div>
 
+<!-- ═══ Modal: copiar régua para outros dias (0.11.0) ═══ -->
+<div class="overlay top" id="copy-modal" hidden>
+  <div class="modal" style="width:420px" role="dialog" aria-modal="true" aria-labelledby="copy-title">
+    <div class="modal-header"><div><div class="modal-title" id="copy-title">Copiar régua para…</div><div class="modal-sub" id="copy-sub"></div></div></div>
+    <div class="modal-body">
+      <div class="copy-presets">
+        <button class="btn btn-ghost btn-sm" onclick="copyPreset(WORKDAYS)">Dias úteis</button>
+        <button class="btn btn-ghost btn-sm" onclick="copyPreset(['wd:6','wd:7'])">Fim de semana</button>
+        <button class="btn btn-ghost btn-sm" onclick="copyPreset([])">Limpar</button>
+      </div>
+      <div id="copy-days" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="$('copy-modal').hidden = true">Cancelar</button>
+      <button class="btn btn-primary" onclick="confirmCopy()">Copiar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ Login ═══ -->
 <div class="overlay top" id="login-overlay" hidden>
   <div class="modal" style="width:380px">
@@ -825,7 +952,6 @@ const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:
 const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem',countdown:'Contador',html:'HTML local',news:'Notícias',today:'Hoje é dia'};
 const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e',countdown:'#14b8a6',html:'#ef4444',news:'#65a30d',today:'#d97706'};
 const ALL_TYPES = Object.keys(TYPE_NAMES);
-const PL_COLOR = '#6366f1';
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch(e) { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch(e) {} },
@@ -887,7 +1013,9 @@ async function refreshLive() {
     const s = await api('GET', '/api/player/state');
     liveSlot = s.slot || 'default';
     $('live-name').textContent = s.source?.name || '—';
-    $('live-until').textContent = s.source?.until ? `até ${s.source.until}` : '';
+    // Régua do dia (0.11.0): aparece quando não é a "Todos os dias"
+    $('live-until').textContent = [s.source?.until ? `até ${s.source.until}` : '',
+      s.ruler && s.ruler.scope !== 'all' ? s.ruler.label : ''].filter(Boolean).join(' · ');
     document.querySelectorAll('.blk').forEach(b => b.classList.toggle('live', liveSlot.endsWith(':' + b.dataset.id)));
   } catch(e) {}
 }
@@ -1174,6 +1302,7 @@ function setNewsForm(c) {
   $('f-news-max').value = c.max_items || 15;
   $('f-news-accent').value = c.accent || '#38bdf8';
   $('f-news-img').checked = c.show_images !== false;
+  $('f-news-logo').checked = c.show_logo !== false;
   $('f-news-block').value = c.block_words ?? NEWS_BLOCK_DEFAULT;
   $('news-test').textContent = '';
 }
@@ -1183,7 +1312,7 @@ function getNewsConfig() {
   return {
     feeds: [...new Set(feeds)], title: $('f-news-title').value.trim(),
     per_headline: parseInt($('f-news-per').value) || 9, max_items: parseInt($('f-news-max').value) || 15,
-    accent: $('f-news-accent').value, show_images: $('f-news-img').checked, block_words: $('f-news-block').value,
+    accent: $('f-news-accent').value, show_images: $('f-news-img').checked, show_logo: $('f-news-logo').checked, block_words: $('f-news-block').value,
   };
 }
 async function testNews() {
@@ -1517,7 +1646,10 @@ function closePreview() { $('pv-overlay').hidden = true; $('pv-body').innerHTML 
 // playlists sempre na trilha base, itens sempre na trilha de sobreposição.
 // Todo arraste/edição altera TL.blocks e agenda o salvamento (PUT /api/schedule).
 const PXH = {60: 90, 30: 180, 15: 360};          // pixels por hora em cada zoom
-const TL = {zoom: +(store.get('av_zoom') || 60), blocks: [], sel: null, saveTimer: null, loaded: false};
+const TL = {zoom: +(store.get('av_zoom') || 60), blocks: [], sel: null, saveTimer: null, loaded: false,
+            // régua em edição (0.11.0): custom = tem versão própria; inherits = a régua que vale no lugar dela
+            scope: /^(all|wd:[1-7])$/.test(store.get('av_scope') || '') ? store.get('av_scope') : 'all',
+            custom: true, inherits: null, inheritsLabel: '', rulers: new Set()};
 if (!PXH[TL.zoom]) TL.zoom = 60;
 const ppm = () => PXH[TL.zoom] / 60;              // pixels por minuto
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1526,9 +1658,14 @@ const fmt = m => m >= 1440 ? '24:00' : `${String(Math.floor(m / 60)).padStart(2,
 const nowMin = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
 
 async function loadTimeline() {
-  const [s] = await Promise.all([api('GET', '/api/schedule'), loadPlaylists(), loadAllItems()]);
-  TL.blocks = s.blocks;
+  await flushSave();
+  const [s, r] = await Promise.all([api('GET', '/api/schedule?scope=' + encodeURIComponent(TL.scope)),
+    api('GET', '/api/schedule/rulers'), loadPlaylists(), loadAllItems()]);
+  TL.blocks = s.blocks; TL.custom = s.custom; TL.inherits = s.inherits; TL.inheritsLabel = s.inherits_label || '';
+  TL.rulers = new Set(r.rulers.map(x => x.scope));
+  if (!TL.custom) TL.sel = null;
   renderLibrary();
+  renderRulerBar();
   renderTimeline();
   refreshLive();
   if (!TL.loaded) { TL.loaded = true; scrollToNow(); }
@@ -1539,7 +1676,7 @@ function refName(b) {
   return allItems.find(i => i.id === b.ref_id)?.name || '(item removido)';
 }
 function blockColor(b) {
-  return b.kind === 'playlist' ? PL_COLOR : (TYPE_COLORS[allItems.find(i => i.id === b.ref_id)?.type] || '#64748b');
+  return b.kind === 'playlist' ? plColor(b.ref_id) : (TYPE_COLORS[allItems.find(i => i.id === b.ref_id)?.type] || '#64748b');
 }
 
 // Biblioteca: chips arrastáveis (HTML5 drag & drop). O tipo vai no dataTransfer
@@ -1553,7 +1690,7 @@ function chipHtml(kind, id, name, color, sub, previewable) {
 
 function renderLibrary() {
   $('lib-playlists').innerHTML = playlists.map(p =>
-    chipHtml('playlist', p.id, p.name, PL_COLOR, `${p.item_count} itens`, false)).join('');
+    chipHtml('playlist', p.id, p.name, plColor(p.id), `${p.item_count} itens`, false)).join('');
   $('lib-items').innerHTML = playlists.map(p => {
     const its = allItems.filter(i => i.playlist_id === p.id);
     if (!its.length) return '';
@@ -1603,7 +1740,8 @@ function renderTimeline() {
       const el = document.createElement('div');
       el.className = 'blk' + (b.id === TL.sel ? ' sel' : '')
         + (bad.has(b.id) ? ' conflict' : inner.has(b.id) ? ' nested' : '')
-        + (liveSlot.endsWith(':' + b.id) ? ' live' : '') + (count > 1 ? ' compact' : '');
+        + (liveSlot.endsWith(':' + b.id) ? ' live' : '') + (count > 1 ? ' compact' : '')
+        + (TL.custom ? '' : ' inh');   // régua herdada: só para consulta
       if (count > 1) { el.style.top = 9 + lane[b.id] * 34 + 'px'; el.style.height = '30px'; }
       el.dataset.id = b.id;
       el.style.setProperty('--c', blockColor(b));
@@ -1611,7 +1749,7 @@ function renderTimeline() {
       el.innerHTML = `<div class="h h-l" data-h="l"></div><div class="t">${esc(refName(b))}</div>
         <div class="r"></div><div class="h h-r" data-h="r"></div>`;
       placeBlock(el, b);
-      attachBlockDrag(el, b);
+      if (TL.custom) attachBlockDrag(el, b);
       trk.appendChild(el);
     });
   }
@@ -1717,6 +1855,13 @@ function setupTrackDrop(trk) {
 }
 
 function addBlock(kind, ref, start, movedTrack) {
+  if (!TL.custom) {
+    // Soltar algo numa régua herdada cria a régua própria do dia, copiando a herdada (ids novos).
+    TL.blocks = TL.blocks.map(b => ({...b, id: uid()}));
+    TL.custom = true; TL.rulers.add(TL.scope);
+    renderRulerBar();
+    setTimeout(() => status(`Régua própria criada para ${scopeLabel(TL.scope)} (cópia de ${TL.inheritsLabel})`), 1500);
+  }
   const len = defaultLen(kind), s = Math.min(start, 1440 - len);
   const b = {id: uid(), kind, ref_id: ref, start_min: s, end_min: s + len};
   TL.blocks.push(b); TL.sel = b.id;
@@ -1742,6 +1887,12 @@ const fromTime = (v, isEnd) => {
 
 function renderEditor() {
   const el = $('tl-editor'), b = TL.blocks.find(x => x.id === TL.sel);
+  if (!b && !TL.custom) {
+    el.innerHTML = `<div class="section-title" style="margin-bottom:8px">Editar bloco</div>
+      <p class="hint" style="color:var(--soft)">Esta régua é herdada (${esc(TL.inheritsLabel)}). Crie a régua própria no aviso acima
+      ou solte uma playlist/item na linha do tempo para começar a editar.</p>`;
+    return;
+  }
   if (!b) {
     el.innerHTML = `<div class="section-title" style="margin-bottom:8px">Editar bloco</div>
       <p class="hint" style="color:var(--soft)">Arraste uma playlist ou item da biblioteca para a linha do tempo.
@@ -1847,8 +1998,16 @@ function scheduleSave() {
   TL.saveTimer = setTimeout(saveSchedule, 400);
 }
 async function saveSchedule() {
+  TL.saveTimer = null;
+  if (!TL.custom) return;   // régua herdada não é gravada (seria criar a régua própria sem querer)
+  const scope = TL.scope, sent = TL.blocks;
   try {
-    await api('PUT', '/api/schedule', {blocks: TL.blocks});
+    const r = await api('PUT', '/api/schedule', {scope, blocks: sent});
+    if (scope !== 'all') TL.rulers.add(scope);
+    // O servidor troca o id de um bloco que já exista em outra régua: guarda os ids que ele usou.
+    if (r.blocks.length === sent.length) sent.forEach((b, i) => {
+      if (b.id !== r.blocks[i].id) { if (TL.sel === b.id) TL.sel = r.blocks[i].id; b.id = r.blocks[i].id; }
+    });
     setSave('Salvo às ' + new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'}));
     refreshLive();
   } catch(e) { setSave('Não foi possível salvar: ' + e.message, true); }
@@ -1857,15 +2016,254 @@ async function saveSchedule() {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!$('pv-overlay').hidden) closePreview();
+    else if (!$('copy-modal').hidden) $('copy-modal').hidden = true;
     else if (!$('name-modal').hidden) closeNameModal();
     else if (!$('modal').hidden) closeModal();
     return;
   }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && TL.sel && !$('tab-schedule').hidden
+  if ((e.key === 'Delete' || e.key === 'Backspace') && TL.sel && TL.custom && !$('tab-schedule').hidden
       && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) {
     e.preventDefault(); removeBlock(TL.sel);
   }
 });
+
+// ═══ RÉGUAS POR DIA DA SEMANA (0.11.0) ════════════════════════════════════════
+// A aba Programação edita UMA régua por vez (TL.scope):
+//   'all' = Todos os dias · 'wd:1'..'wd:7' = segunda..domingo · 'date:AAAA-MM-DD' = exceção.
+// Qual régua vale num dia (decidido no servidor, ruler_for_day):
+//   exceção da data  >  régua do dia da semana  >  Todos os dias  (e, dentro dela, Playlist padrão nos vazios).
+// Régua sem versão própria (TL.custom = false): a timeline mostra, apagada e só para consulta, a régua
+// que vale no lugar dela (TL.inherits). Soltar algo nela cria a régua própria copiando a herdada.
+const WD_SHORT = {1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex', 6: 'Sáb', 7: 'Dom'};
+const WD_LONG = {1: 'Segunda-feira', 2: 'Terça-feira', 3: 'Quarta-feira', 4: 'Quinta-feira', 5: 'Sexta-feira', 6: 'Sábado', 7: 'Domingo'};
+const WORKDAYS = ['wd:1', 'wd:2', 'wd:3', 'wd:4', 'wd:5'];
+const pad2 = n => String(n).padStart(2, '0');
+const fmtDate = iso => iso.split('-').reverse().join('/');
+const isoLocal = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+function scopeLabel(s) {
+  if (!s || s === 'all') return 'Todos os dias';
+  if (s.startsWith('wd:')) return WD_LONG[s.slice(3)];
+  return 'Exceção de ' + fmtDate(s.slice(5));
+}
+
+// Envia já o salvamento pendente (antes de trocar de régua, para não gravar na régua errada).
+async function flushSave() {
+  if (TL.saveTimer) { clearTimeout(TL.saveTimer); TL.saveTimer = null; await saveSchedule(); }
+}
+
+async function setScope(scope) {
+  if (!scope || scope === TL.scope) return;
+  await flushSave();
+  TL.scope = scope; TL.sel = null;
+  if (!scope.startsWith('date:')) store.set('av_scope', scope);
+  await loadTimeline();
+}
+
+function renderRulerBar() {
+  const scopes = ['all', 'wd:1', 'wd:2', 'wd:3', 'wd:4', 'wd:5', 'wd:6', 'wd:7'];
+  let h = scopes.map(s => `<button data-s="${s}" class="${s === TL.scope ? 'active' : ''}${TL.rulers.has(s) ? ' own' : ''}"
+      title="${esc(scopeLabel(s))}${TL.rulers.has(s) ? ' · tem régua própria' : s === 'all' ? '' : ' · segue Todos os dias'}">${s === 'all' ? 'Todos os dias' : WD_SHORT[s.slice(3)]}</button>`).join('');
+  if (TL.scope.startsWith('date:')) h += `<button class="active" data-s="${TL.scope}">📌 ${fmtDate(TL.scope.slice(5))}</button>`;
+  $('ruler-seg').innerHTML = h;
+  $('ruler-seg').querySelectorAll('button').forEach(b => b.onclick = () => setScope(b.dataset.s));
+  $('ruler-date').value = TL.scope.startsWith('date:') ? TL.scope.slice(5) : '';
+  $('btn-del-ruler').hidden = TL.scope === 'all' || !TL.custom;
+  const lbl = esc(scopeLabel(TL.scope)), ban = $('ruler-banner');
+  ban.classList.toggle('inh', !TL.custom);
+  if (!TL.custom) {
+    ban.innerHTML = `<span><b>${lbl}</b> não tem régua própria: segue <b>${esc(TL.inheritsLabel)}</b>
+      (abaixo, apagada, só para consulta).</span>
+      <button class="btn btn-primary btn-sm" onclick="createRuler(true)">Criar régua própria copiando ${esc(TL.inheritsLabel)}</button>
+      <button class="btn btn-ghost btn-sm" onclick="createRuler(false)">Criar vazia</button>`;
+  } else if (TL.scope === 'all') {
+    const own = [...TL.rulers].filter(s => s.startsWith('wd:')).sort().map(s => WD_SHORT[s.slice(3)]);
+    ban.innerHTML = `<span>Vale para todos os dias <b>sem régua própria</b>${own.length ? ` (têm régua própria: ${own.join(', ')})` : ''}.
+      Exceções de datas ficam no <a href="#" onclick="showTab('calendar');return false">Calendário</a>.</span>`;
+  } else if (TL.scope.startsWith('wd:')) {
+    ban.innerHTML = `<span>Régua própria de <b>${lbl}</b>: nesse dia vale só ela (a de Todos os dias é ignorada).
+      Exceções de datas no Calendário continuam tendo prioridade.</span>`;
+  } else {
+    ban.innerHTML = `<span><b>${lbl}</b> (${WD_LONG[new Date(TL.scope.slice(5) + 'T12:00').getDay() || 7]}): vale só nessa data,
+      acima da régua do dia da semana. Para voltar ao normal, use <b>Remover régua própria</b>.</span>`;
+  }
+}
+
+// Cria a régua própria do dia escolhido: copiando a herdada (ids novos) ou vazia.
+async function createRuler(copy) {
+  TL.blocks = copy ? TL.blocks.map(b => ({...b, id: uid()})) : [];
+  TL.custom = true; TL.sel = null;
+  TL.rulers.add(TL.scope);
+  renderRulerBar(); renderTimeline();
+  await saveSchedule();
+  status(`Régua própria criada: ${scopeLabel(TL.scope)}`);
+}
+
+async function deleteRuler() {
+  const back = TL.scope.startsWith('date:') ? 'à régua do dia da semana (ou Todos os dias)' : 'à régua Todos os dias';
+  if (!confirm(`Remover a régua própria de ${scopeLabel(TL.scope)}? O dia volta ${back}.`)) return;
+  try {
+    clearTimeout(TL.saveTimer); TL.saveTimer = null;
+    await api('DELETE', '/api/schedule?scope=' + encodeURIComponent(TL.scope));
+    status('Régua própria removida');
+    await loadTimeline();
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+
+// Atalho "Dias úteis": copia a régua aberta para segunda a sexta de uma vez.
+async function copyToWorkdays() { await copyRuler(WORKDAYS.filter(s => s !== TL.scope)); }
+
+async function copyRuler(targets) {
+  if (!targets.length) { status('Escolha pelo menos um dia', 'err'); return false; }
+  await flushSave();
+  const over = targets.filter(s => s === 'all' || TL.rulers.has(s)).map(scopeLabel);
+  const msg = `Copiar a régua "${scopeLabel(TL.scope)}" para: ${targets.map(scopeLabel).join(', ')}?`
+    + (over.length ? `\n\nA programação atual destes será substituída: ${over.join(', ')}.` : '');
+  if (!confirm(msg)) return false;
+  try {
+    await api('POST', '/api/schedule/copy', {from: TL.scope, to: targets});
+    status(`Régua copiada para ${targets.length} dia(s)`);
+    await loadTimeline();
+    return true;
+  } catch(e) { status('Erro: ' + e.message, 'err'); return false; }
+}
+
+function openCopyModal() {
+  const opts = ['all', 'wd:1', 'wd:2', 'wd:3', 'wd:4', 'wd:5', 'wd:6', 'wd:7'].filter(s => s !== TL.scope);
+  $('copy-sub').textContent = 'De: ' + scopeLabel(TL.scope);
+  $('copy-days').innerHTML = opts.map(s => `<label class="check-line"><input type="checkbox" value="${s}"> ${esc(scopeLabel(s))}
+    ${TL.rulers.has(s) || s === 'all' ? '<span class="hint">(será substituída)</span>' : ''}</label>`).join('');
+  $('copy-modal').hidden = false;
+}
+function copyPreset(list) { $('copy-days').querySelectorAll('input').forEach(i => i.checked = list.includes(i.value)); }
+async function confirmCopy() {
+  const t = [...$('copy-days').querySelectorAll('input:checked')].map(i => i.value);
+  if (await copyRuler(t)) $('copy-modal').hidden = true;
+}
+
+// ═══ CALENDÁRIO (0.11.0) ══════════════════════════════════════════════════════
+// Panorama do mês (GET /api/calendar): cada dia mostra qual régua vale (cor da borda esquerda:
+// cinza = Todos os dias, azul = régua do dia da semana, laranja = exceção da data), o feriado,
+// uma faixa de 24 h com os blocos e as playlists agendadas. Clicar num dia abre o painel ao lado,
+// onde se cria/remove a exceção, se põe uma playlist o dia todo ou se abre a régua na Programação.
+const CAL = {month: null, data: null, sel: null};
+const PL_PALETTE = ['#6366f1', '#0ea5e9', '#10b981', '#f43f5e', '#eab308', '#8b5cf6', '#f97316', '#14b8a6', '#ec4899', '#84cc16'];
+function plColor(id) { const i = playlists.findIndex(p => p.id === id); return PL_PALETTE[(i < 0 ? 0 : i) % PL_PALETTE.length]; }
+
+async function loadCalendar() {
+  if (!CAL.month) CAL.month = isoLocal(new Date()).slice(0, 7);
+  const [data] = await Promise.all([api('GET', '/api/calendar?month=' + CAL.month), loadPlaylists(), loadAllItems()]);
+  CAL.data = data;
+  if (!CAL.sel || !CAL.sel.startsWith(CAL.month))
+    CAL.sel = data.today.startsWith(CAL.month) ? data.today : data.days[0].date;
+  renderCalendar(); renderCalDay();
+}
+function calMove(n) {
+  const [y, m] = CAL.month.split('-').map(Number), d = new Date(y, m - 1 + n, 1);
+  CAL.month = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`; CAL.sel = null;
+  loadCalendar().catch(e => status('Erro: ' + e.message, 'err'));
+}
+function calToday() { CAL.month = null; CAL.sel = null; loadCalendar().catch(e => status('Erro: ' + e.message, 'err')); }
+
+function stripHtml(blocks) {   // faixa de 24 h: playlists embaixo, itens avulsos por cima
+  return [...blocks].sort((a, b) => (a.kind === 'item') - (b.kind === 'item')).map(b => {
+    const c = b.kind === 'playlist' ? plColor(b.ref_id) : (TYPE_COLORS[allItems.find(i => i.id === b.ref_id)?.type] || '#64748b');
+    return `<span class="${b.kind === 'item' ? 'it' : ''}" style="left:${b.start_min / 14.4}%;width:${Math.max(.6, (b.end_min - b.start_min) / 14.4)}%;background:${c}"></span>`;
+  }).join('');
+}
+
+function renderCalendar() {
+  const D = CAL.data, first = new Date(D.month + '-01T12:00');
+  const t = first.toLocaleDateString('pt-BR', {month: 'long', year: 'numeric'});
+  $('cal-title').textContent = t[0].toUpperCase() + t.slice(1);   // "Dezembro de 2026"
+  let h = Object.values(WD_SHORT).map(w => `<div class="cal-wd">${w}</div>`).join('');
+  h += '<div class="cal-blank"></div>'.repeat(D.days[0].weekday - 1);
+  h += D.days.map(d => {
+    const badge = d.level === 'date' ? 'Exceção' : d.level === 'weekday' ? WD_SHORT[d.weekday] : '';
+    const pls = d.playlists.slice(0, 3).map(p => `<span class="cd-pl" style="--c:${plColor(p.id)}" title="${esc(p.name)}">${esc(p.name)}</span>`).join('')
+      + (d.playlists.length > 3 ? `<span class="cd-def">+${d.playlists.length - 3}</span>` : '')
+      + (d.items.length ? `<span class="cd-def">+${d.items.length} avulso${d.items.length > 1 ? 's' : ''}</span>` : '');
+    return `<button class="cal-day lvl-${d.level}${d.date === D.today ? ' today' : ''}${d.date < D.today ? ' past' : ''}${d.date === CAL.sel ? ' sel' : ''}"
+        data-d="${d.date}" title="${esc(d.label)}${d.holiday ? ' · ' + esc(d.holiday) : ''}">
+      <div class="cd-top"><span class="cd-n">${+d.date.slice(8)}</span>${badge ? `<span class="cd-lvl">${badge}</span>` : ''}</div>
+      ${d.holiday ? `<div class="cd-hol">🎉 ${esc(d.holiday)}</div>` : ''}
+      <div class="cd-bar">${stripHtml(d.blocks)}</div>
+      <div class="cd-pls">${pls || `<span class="cd-def">${esc(D.default_name)}</span>`}</div>
+    </button>`;
+  }).join('');
+  $('cal-grid').innerHTML = h;
+  $('cal-grid').querySelectorAll('.cal-day').forEach(el => el.onclick = () => {
+    CAL.sel = el.dataset.d;
+    $('cal-grid').querySelectorAll('.cal-day').forEach(x => x.classList.toggle('sel', x === el));
+    renderCalDay();
+  });
+}
+
+function renderCalDay() {
+  const d = CAL.data.days.find(x => x.date === CAL.sel);
+  if (!d) { $('cal-day').innerHTML = ''; return; }
+  const wdScope = 'wd:' + d.weekday, exc = 'date:' + d.date;
+  const why = d.level === 'date' ? 'esta data tem uma <b>exceção</b>, que tem prioridade sobre tudo.'
+    : d.level === 'weekday' ? `${WD_LONG[d.weekday].toLowerCase()} tem <b>régua própria</b>.`
+    : `${WD_LONG[d.weekday].toLowerCase()} não tem régua própria, então vale <b>Todos os dias</b>.`;
+  const rows = [...d.blocks].sort((a, b) => a.start_min - b.start_min).map(b => {
+    const nm = b.kind === 'playlist' ? (playlists.find(p => p.id === b.ref_id)?.name || '?') : (allItems.find(i => i.id === b.ref_id)?.name || '?');
+    const c = b.kind === 'playlist' ? plColor(b.ref_id) : (TYPE_COLORS[allItems.find(i => i.id === b.ref_id)?.type] || '#64748b');
+    return `<li><span class="dot" style="background:${c}"></span><span class="tm">${fmt(b.start_min)}–${fmt(b.end_min)}</span>
+      <span class="nm">${esc(nm)}</span><span class="hint">${b.kind === 'playlist' ? 'playlist' : 'item avulso'}</span></li>`;
+  }).join('');
+  $('cal-day').innerHTML = `
+    <div class="section-title" style="margin-bottom:4px">${WD_LONG[d.weekday]}, ${fmtDate(d.date)}</div>
+    ${d.holiday ? `<div class="cal-hol">🎉 Feriado nacional: <b>${esc(d.holiday)}</b></div>` : ''}
+    <p class="cal-why">Régua em uso: <b>${esc(d.label)}</b>, porque ${why}</p>
+    <div class="cal-strip">${stripHtml(d.blocks)}<i style="left:25%"></i><i style="left:50%"></i><i style="left:75%"></i></div>
+    <div class="cal-hours"><span>00h</span><span>06h</span><span>12h</span><span>18h</span><span>24h</span></div>
+    ${rows ? `<ul class="cal-blocks">${rows}</ul>` : ''}
+    <p class="hint" style="margin-top:6px">${rows ? 'Horários sem bloco' : 'Sem blocos: o dia todo'} ficam na <b>${esc(CAL.data.default_name)}</b>.</p>
+    <div class="cal-actions">
+      ${d.level === 'date'
+        ? `<button class="btn btn-primary btn-sm" onclick="goSchedule('${exc}')">Editar a exceção</button>
+           <button class="btn btn-danger btn-sm" onclick="calRemoveException('${d.date}')">Remover exceção</button>`
+        : `<button class="btn btn-primary btn-sm" onclick="calCreateException('${d.date}')">Criar exceção para este dia</button>`}
+      <div class="cal-allday">
+        <label for="cal-pl">Exibir uma playlist o dia todo (exceção)</label>
+        <div style="display:flex;gap:8px"><select id="cal-pl">${playlists.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>
+        <button class="btn btn-ghost btn-sm" onclick="calAllDay('${d.date}')">Aplicar</button></div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="goSchedule('${wdScope}')">Editar a régua de ${WD_LONG[d.weekday].toLowerCase()}${d.has_weekday_ruler ? '' : ' (criar)'}</button>
+      <button class="btn btn-ghost btn-sm" onclick="goSchedule('all')">Editar Todos os dias</button>
+    </div>`;
+}
+
+async function goSchedule(scope) {
+  await flushSave();
+  TL.scope = scope; TL.sel = null;
+  if (!scope.startsWith('date:')) store.set('av_scope', scope);
+  showTab('schedule');
+}
+async function calCreateException(day) {
+  // Começa como cópia da régua que vale hoje nesse dia; aí é só ajustar o que muda.
+  const d = CAL.data.days.find(x => x.date === day);
+  try {
+    await api('POST', '/api/schedule/copy', {from: d.scope, to: ['date:' + day]});
+    status(`Exceção criada para ${fmtDate(day)} (cópia de ${d.label})`);
+    goSchedule('date:' + day);
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+async function calRemoveException(day) {
+  if (!confirm(`Remover a exceção de ${fmtDate(day)}? O dia volta a seguir a régua do dia da semana (ou Todos os dias).`)) return;
+  try { await api('DELETE', '/api/schedule?scope=date:' + day); status('Exceção removida'); await loadCalendar(); }
+  catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+async function calAllDay(day) {
+  const d = CAL.data.days.find(x => x.date === day), pid = $('cal-pl').value;
+  const name = playlists.find(p => p.id === pid)?.name;
+  if (d.level === 'date' && !confirm(`${fmtDate(day)} já tem uma exceção. Trocar por "${name}" o dia todo?`)) return;
+  try {
+    await api('POST', '/api/schedule/copy', {to: ['date:' + day], blocks: [{kind: 'playlist', ref_id: pid, start_min: 0, end_min: 1440}]});
+    status(`${fmtDate(day)}: ${name} o dia todo`);
+    await loadCalendar();
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
+}
 
 // ═══ CONFIGURAÇÕES ════════════════════════════════════════════════════════════
 async function loadSettings() {
@@ -1943,7 +2341,7 @@ async function resetCuriosities() {
 }
 
 // ═══ NAVEGAÇÃO E INICIALIZAÇÃO ════════════════════════════════════════════════
-const TITLES = {playlists: 'Playlists', schedule: 'Programação', settings: 'Configurações'};
+const TITLES = {playlists: 'Playlists', schedule: 'Programação', calendar: 'Calendário', settings: 'Configurações'};
 function showTab(tab) {
   Object.keys(TITLES).forEach(t => {
     $(`tab-${t}`).hidden = t !== tab;
@@ -1953,6 +2351,7 @@ function showTab(tab) {
   $('page-title').textContent = TITLES[tab];
   store.set('av_tab', tab);
   if (tab === 'settings') loadSettings().catch(() => {});
+  if (tab === 'calendar') loadCalendar().catch(e => status('Erro ao carregar o calendário: ' + e.message, 'err'));
   if (tab === 'schedule') loadTimeline().catch(e => status('Erro ao carregar a programação: ' + e.message, 'err'));
 }
 
@@ -1960,6 +2359,7 @@ async function refreshAll() {
   await loadPlaylists();
   await Promise.all([loadPlaylist(), loadAllItems()]);
   if (!$('tab-schedule').hidden) await loadTimeline();
+  if (!$('tab-calendar').hidden) await loadCalendar();
   refreshLive();
 }
 

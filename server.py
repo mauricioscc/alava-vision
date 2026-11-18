@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.10.0
+Alava Vision — Servidor (server.py) · versão 0.11.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -7,7 +7,11 @@ COMO RODAR
     Painel ........ http://localhost:8080/   (usuário "admin", senha = ADMIN_PASSWORD do .env)
     Testes rápidos no navegador:
         http://localhost:8080/api/player/state  → o que o player deve exibir AGORA (resultado da grade)
-        http://localhost:8080/api/schedule      → blocos salvos na timeline
+        http://localhost:8080/api/schedule      → blocos da régua "Todos os dias"
+        http://localhost:8080/api/schedule?scope=wd:1            → régua de segunda-feira (wd:1..wd:7)
+        http://localhost:8080/api/schedule?scope=date:2026-12-24 → exceção de uma data
+        http://localhost:8080/api/schedule/rulers               → réguas próprias criadas
+        http://localhost:8080/api/calendar?month=2026-12        → panorama do mês (régua de cada dia)
         http://localhost:8080/api/weather       → dados de clima usados na tela de previsão
         http://localhost:8080/view/countdown/<id_do_item>  → contador regressivo de um item
         http://localhost:8080/view/html/<id_do_item>       → página HTML local de um item
@@ -25,6 +29,10 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.10.0 (antes do calendário e das réguas por dia da semana):
+        git checkout 8c60d7f -- server.py static/index.html
+        A 0.10.0 lê só a régua "Todos os dias" (os blocos das outras réguas ficam no banco, ignorados).
+        Para limpar: DELETE FROM schedule WHERE scope<>'all'; DELETE FROM rulers;
     Para a 0.9.0 (antes da mensagem avançada, RSS, curiosidades e voz):
         git checkout 027e198 -- server.py player.py static/index.html
         Mensagens novas continuam abrindo na 0.9.0, só sem as opções extras (fundo, fonte...).
@@ -43,8 +51,13 @@ MAPA DO CÓDIGO
     Playlists ....................... GET/POST /api/playlists, PUT/DELETE /api/playlists/{id}
     Itens ........................... GET /api/playlist, POST /api/items,
                                       PUT /api/items/reorder, PUT/DELETE /api/items/{id}
-    Grade horária (timeline) ........ GET/PUT /api/schedule, _clean_block()
-    O que está no ar agora .......... resolve_now(), _pick_block(), current_state(), GET /api/player/state
+    Grade horária (timeline) ........ GET/PUT/DELETE /api/schedule (?scope=), _clean_block(), _write_ruler()
+      réguas por dia / exceções ..... tabela rulers + coluna schedule.scope; _check_scope(), scope_label(),
+                                      ruler_for_day() (PRIORIDADE: exceção > dia da semana > Todos os dias)
+      dias úteis / copiar ........... POST /api/schedule/copy, GET /api/schedule/rulers
+      calendário (panorama do mês) .. GET /api/calendar?month=AAAA-MM (régua, blocos e feriado de cada dia)
+    O que está no ar agora .......... resolve_now() (escolhe a régua do dia), _pick_block(), current_state(),
+                                      GET /api/player/state (campo "ruler" = régua em uso hoje)
     Aviso instantâneo (WebSocket) ... WS /ws/player, _players, _broadcast(), _push_watcher(),
                                       _notify_players() (middleware: avisa após salvar no painel)
     Upload e arquivos ............... POST /api/upload, /uploads/* e /assets/* (StaticFiles)
@@ -64,7 +77,7 @@ MAPA DO CÓDIGO
                                       /view/traffic, /view/message/{id},
                                       /view/html/{id} (redireciona para /html/...), /view/countdown/{id}
       vídeo repetir ou não .......... view_video(): config.loop (padrão True)
-      notícias (RSS) ................ /view/news/{id}, GET /api/news/{id}, POST /api/news-test,
+      notícias (RSS) ................ /view/news/{id} (logo Alava no cabeçalho: config.show_logo, .top .logo), GET /api/news/{id}, POST /api/news-test,
                                       get_news() (filtro, sem repetidas), _fetch_feed() (cache NEWS_TTL),
                                       _parse_feed() (RSS e Atom), _warm_news() (em 2º plano, com o clima)
       curiosidades e datas .......... /view/today (?d=AAAA-MM-DD), GET /api/today, GET/PUT /api/curiosities,
@@ -77,14 +90,15 @@ MAPA DO CÓDIGO
                                       (cache data/tts/, TTS_RATES), _speech_text(); Piper em ferramentas/piper/
       mensagem ...................... view_message() e view_message_preview() → _render_message()
                                       (fundo sólido/degradê/imagem, MSG_FONTS, MSG_ANIMS, _css_color())
-    Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
-                                      Só clima e trânsito exibem o logo; sites, imagens, vídeos e
-                                      mensagens aparecem sem ele.
+    Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html;
+                                      nas notícias, cabeçalho de view_news() (0.11.0, pode desligar no item).
+                                      Sites, imagens, vídeos e mensagens aparecem sem ele.
 """
 import asyncio
 import html
 import json
 import os
+import re as _re
 import secrets
 import sqlite3
 import threading
@@ -92,7 +106,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime
+from datetime import date as _date, datetime, timedelta as _timedelta
 from pathlib import Path
 
 import aiofiles
@@ -103,7 +117,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 load_dotenv()
 
@@ -198,6 +212,20 @@ def init_db():
                 ref_id     TEXT NOT NULL,
                 start_min  INTEGER NOT NULL,
                 end_min    INTEGER NOT NULL,
+                created_at INTEGER
+            )""")
+        # 0.11.0: cada bloco pertence a uma "régua" (scope). Blocos antigos ficam em 'all'
+        # ("Todos os dias"), então quem atualiza continua com a mesma programação.
+        scols = {r["name"] for r in con.execute("PRAGMA table_info(schedule)")}
+        if "scope" not in scols:
+            con.execute("ALTER TABLE schedule ADD COLUMN scope TEXT NOT NULL DEFAULT 'all'")
+        con.execute("CREATE INDEX IF NOT EXISTS schedule_scope ON schedule(scope)")
+        # Réguas próprias criadas (dia da semana 'wd:1'..'wd:7' ou exceção 'date:AAAA-MM-DD').
+        # A linha existir já basta: uma régua própria VAZIA também vale (o dia inteiro na
+        # Playlist padrão), por isso não dá para deduzir isso só pelos blocos.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS rulers (
+                scope      TEXT PRIMARY KEY,
                 created_at INTEGER
             )""")
         con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
@@ -356,19 +384,81 @@ def delete_item(item_id: str):
     return {"ok": True}
 
 
-# ─── Grade horária (timeline) ─────────────────────────────────────────────────
+# ─── Grade horária (timeline) e calendário ────────────────────────────────────
 #
-# REGRA DE PRIORIDADE (a mesma explicada no painel):
+# RÉGUAS (0.11.0). Uma "régua" é a grade de 00:00 a 23:59 de um dia. Existem três níveis:
+#   'all'               → "Todos os dias" (a régua única das versões anteriores);
+#   'wd:1' … 'wd:7'     → régua própria de um dia da semana (1 = segunda … 7 = domingo,
+#                         como date.isoweekday()). "Dias úteis" = copiar para wd:1..wd:5;
+#   'date:AAAA-MM-DD'   → exceção de uma data específica (feriado, evento...).
+#
+# QUAL RÉGUA VALE NUM DIA (ruler_for_day). A régua é escolhida INTEIRA, não bloco a bloco:
+#   1. existe exceção para a data              → usa a exceção;
+#   2. senão, o dia da semana tem régua própria → usa a do dia da semana;
+#   3. senão                                    → usa "Todos os dias".
+#   Uma régua própria vazia também conta: o dia fica todo na Playlist padrão.
+#   Para "só mudar o almoço de sexta", o painel cria a régua de sexta copiando a de
+#   "Todos os dias" e aí se edita só o trecho desejado.
+#
+# DENTRO DA RÉGUA ESCOLHIDA (resolve_now), a mesma regra de sempre:
 #   1. Item avulso com bloco no horário atual → a TV mostra só esse item.
 #      Ele "sobrepõe" temporariamente qualquer playlist da trilha base.
 #   2. Senão, playlist com bloco no horário atual → a TV roda essa playlist.
-#   3. Senão (ou se o bloco aponta para algo vazio/desativado) → Playlist padrão.
+#   3. Senão (ou se o bloco aponta para algo vazio/desativado) → Playlist padrão (fallback).
 #   Dois blocos da MESMA trilha no mesmo horário: vence o que começou mais
 #   tarde (o mais específico, ex.: 12:00–13:00 dentro de 08:00–18:00).
 #   Se começarem juntos, vence o mais curto.
 
+WEEKDAY_NAMES = {1: "Segunda-feira", 2: "Terça-feira", 3: "Quarta-feira", 4: "Quinta-feira",
+                 5: "Sexta-feira", 6: "Sábado", 7: "Domingo"}
+_SCOPE_RE = _re.compile(r"^(all|wd:[1-7]|date:\d{4}-\d{2}-\d{2})$")
+
+
 def _hhmm(minutes: int) -> str:
     return "24:00" if minutes == 1440 else f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _check_scope(scope: str | None) -> str:
+    """Valida o nome da régua (padrão 'all', compatível com o painel antigo)."""
+    scope = (scope or "all").strip()
+    if not _SCOPE_RE.match(scope):
+        raise HTTPException(400, f"Régua inválida: {scope}")
+    if scope.startswith("date:"):
+        try:
+            _date.fromisoformat(scope[5:])
+        except ValueError:
+            raise HTTPException(400, f"Data inválida: {scope[5:]}")
+    return scope
+
+
+def scope_label(scope: str) -> str:
+    if scope == "all":
+        return "Todos os dias"
+    if scope.startswith("wd:"):
+        return WEEKDAY_NAMES[int(scope[3:])]
+    d = _date.fromisoformat(scope[5:])
+    return f"Exceção {d.strftime('%d/%m/%Y')}"
+
+
+def _custom_scopes(con: sqlite3.Connection) -> set[str]:
+    return {r["scope"] for r in con.execute("SELECT scope FROM rulers")}
+
+
+def ruler_for_day(day: _date, custom: set[str]) -> str:
+    """Aplica a hierarquia: exceção da data > régua do dia da semana > Todos os dias."""
+    exc = f"date:{day.isoformat()}"
+    if exc in custom:
+        return exc
+    wd = f"wd:{day.isoweekday()}"
+    if wd in custom:
+        return wd
+    return "all"
+
+
+def _blocks_of(con: sqlite3.Connection, scope: str) -> list[dict]:
+    rows = con.execute("SELECT id, kind, ref_id, start_min, end_min FROM schedule WHERE scope=? "
+                       "ORDER BY start_min", (scope,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def _clean_block(b: dict, playlist_ids: set, item_ids: set) -> dict:
@@ -386,28 +476,154 @@ def _clean_block(b: dict, playlist_ids: set, item_ids: set) -> dict:
             "start_min": start, "end_min": end}
 
 
+def _write_ruler(con: sqlite3.Connection, scope: str, blocks: list[dict]) -> list[dict]:
+    """Troca os blocos de uma régua. Os ids são únicos no banco inteiro: um id que já existe
+    em OUTRA régua (ex.: blocos copiados no painel) ganha um id novo."""
+    pl = {r["id"] for r in con.execute("SELECT id FROM playlists")}
+    it = {r["id"] for r in con.execute("SELECT id FROM items")}
+    taken = {r["id"] for r in con.execute("SELECT id FROM schedule WHERE scope<>?", (scope,))}
+    clean, seen = [], set()
+    for b in blocks:
+        c = _clean_block(b, pl, it)
+        if c["id"] in taken or c["id"] in seen:
+            c["id"] = uuid.uuid4().hex[:12]
+        seen.add(c["id"])
+        clean.append(c)
+    now = int(time.time())
+    con.execute("DELETE FROM schedule WHERE scope=?", (scope,))
+    con.executemany("INSERT INTO schedule (id, kind, ref_id, start_min, end_min, created_at, scope) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    [(b["id"], b["kind"], b["ref_id"], b["start_min"], b["end_min"], now, scope) for b in clean])
+    if scope != "all":
+        con.execute("INSERT OR IGNORE INTO rulers VALUES (?,?)", (scope, now))
+    return clean
+
+
 @app.get("/api/schedule")
-def get_schedule():
+def get_schedule(scope: str = "all"):
+    """Blocos de uma régua. `custom` diz se ela existe; se não existir, `inherits` diz qual
+    régua vale no lugar dela (e `blocks` traz os blocos dessa, só para mostrar)."""
+    scope = _check_scope(scope)
     with db() as con:
-        rows = con.execute("SELECT id, kind, ref_id, start_min, end_min FROM schedule ORDER BY start_min").fetchall()
-    return {"blocks": [dict(r) for r in rows]}
+        custom = _custom_scopes(con)
+        own = scope == "all" or scope in custom
+        if own:
+            inherits = None
+        elif scope.startswith("date:"):
+            inherits = ruler_for_day(_date.fromisoformat(scope[5:]), custom)
+        else:
+            inherits = "all"
+        blocks = _blocks_of(con, scope if own else inherits)
+    return {"scope": scope, "label": scope_label(scope), "custom": own, "inherits": inherits,
+            "inherits_label": scope_label(inherits) if inherits else None, "blocks": blocks}
+
+
+@app.get("/api/schedule/rulers")
+def list_rulers():
+    """Réguas próprias criadas, com a quantidade de blocos de cada uma."""
+    with db() as con:
+        counts = {r["scope"]: r["n"] for r in con.execute("SELECT scope, COUNT(*) AS n FROM schedule GROUP BY scope")}
+        scopes = sorted(_custom_scopes(con))
+    return {"rulers": [{"scope": s, "label": scope_label(s), "blocks": counts.get(s, 0)} for s in scopes],
+            "all_blocks": counts.get("all", 0)}
 
 
 @app.put("/api/schedule", dependencies=[Depends(require_auth)])
 async def save_schedule(request: Request):
-    """Substitui a grade inteira (o painel sempre envia a lista completa)."""
+    """Substitui a régua inteira (o painel sempre envia a lista completa).
+    Sem `scope` no corpo, grava em "Todos os dias", como nas versões anteriores."""
     body = await request.json()
+    scope = _check_scope(body.get("scope"))
     with db() as con:
-        pl = {r["id"] for r in con.execute("SELECT id FROM playlists")}
-        it = {r["id"] for r in con.execute("SELECT id FROM items")}
-        blocks = [_clean_block(b, pl, it) for b in body.get("blocks", [])]
-        con.execute("DELETE FROM schedule")
-        now = int(time.time())
-        con.executemany("INSERT INTO schedule VALUES (?,?,?,?,?,?)",
-                        [(b["id"], b["kind"], b["ref_id"], b["start_min"], b["end_min"], now) for b in blocks])
+        blocks = _write_ruler(con, scope, body.get("blocks", []))
         bump_version(con)
         con.commit()
-    return {"blocks": blocks}
+    return {"scope": scope, "blocks": blocks}
+
+
+@app.post("/api/schedule/copy", dependencies=[Depends(require_auth)])
+async def copy_schedule(request: Request):
+    """Copia uma régua para outras (ex.: "Repetir nos dias úteis": to = wd:1..wd:5).
+    As réguas de destino são substituídas e passam a existir como réguas próprias.
+    {"from": "all", "to": ["wd:1", ...]}  ou  {"from": ..., "to": [...], "blocks": [...]}
+    para criar a partir de uma lista pronta (ex.: "a playlist X o dia todo")."""
+    body = await request.json()
+    targets = [_check_scope(t) for t in body.get("to", [])]
+    if not targets:
+        raise HTTPException(400, "Escolha pelo menos um dia de destino")
+    with db() as con:
+        if "blocks" in body:
+            src = body["blocks"]
+        else:
+            frm = _check_scope(body.get("from"))
+            custom = _custom_scopes(con)
+            if frm != "all" and frm not in custom:   # copiar de régua herdada = copiar da que vale
+                frm = ruler_for_day(_date.fromisoformat(frm[5:]), custom) if frm.startswith("date:") else "all"
+            src = _blocks_of(con, frm)
+        for t in targets:
+            # id novo em cada cópia: o id de um bloco identifica o "slot" no ar
+            _write_ruler(con, t, [dict(b, id=None) for b in src])
+        bump_version(con)
+        con.commit()
+    return {"ok": True, "to": targets, "blocks": len(src)}
+
+
+@app.delete("/api/schedule", dependencies=[Depends(require_auth)])
+def delete_ruler(scope: str):
+    """Apaga uma régua própria: o dia volta a seguir o nível de cima (dia da semana ou Todos os dias)."""
+    scope = _check_scope(scope)
+    if scope == "all":
+        raise HTTPException(400, "A régua Todos os dias não pode ser removida (só esvaziada)")
+    with db() as con:
+        con.execute("DELETE FROM schedule WHERE scope=?", (scope,))
+        con.execute("DELETE FROM rulers WHERE scope=?", (scope,))
+        bump_version(con)
+        con.commit()
+    return {"ok": True}
+
+
+@app.get("/api/calendar")
+def calendar_month(month: str | None = None):
+    """Panorama de um mês (?month=AAAA-MM): para cada dia, qual régua vale (e por quê),
+    as playlists e itens agendados nela e o feriado nacional, se houver."""
+    try:
+        first = _date.fromisoformat((month or _date.today().strftime("%Y-%m")) + "-01")
+    except ValueError:
+        raise HTTPException(400, "Mês inválido (use AAAA-MM)")
+    nxt = (first.replace(day=28) + _timedelta(days=4)).replace(day=1)
+    hol = {}
+    try:
+        hol = {h["date"]: h["name"] for h in holidays(first.year)}
+    except Exception:
+        pass
+    with db() as con:
+        custom = _custom_scopes(con)
+        pl_names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM playlists")}
+        it_names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM items")}
+        cache: dict[str, dict] = {}
+
+        def summary(scope: str) -> dict:
+            if scope not in cache:
+                bs = _blocks_of(con, scope)
+                pls, its = [], []
+                for b in bs:
+                    if b["kind"] == "playlist" and b["ref_id"] not in [p["id"] for p in pls]:
+                        pls.append({"id": b["ref_id"], "name": pl_names.get(b["ref_id"], "?")})
+                    if b["kind"] == "item" and b["ref_id"] not in [i["id"] for i in its]:
+                        its.append({"id": b["ref_id"], "name": it_names.get(b["ref_id"], "?")})
+                cache[scope] = {"playlists": pls, "items": its, "blocks": bs}
+            return cache[scope]
+
+        days, d = [], first
+        while d < nxt:
+            sc = ruler_for_day(d, custom)
+            days.append({"date": d.isoformat(), "weekday": d.isoweekday(), "scope": sc,
+                         "level": "date" if sc.startswith("date:") else "weekday" if sc.startswith("wd:") else "all",
+                         "label": scope_label(sc), "holiday": hol.get(d.isoformat()),
+                         "has_weekday_ruler": f"wd:{d.isoweekday()}" in custom, **summary(sc)})
+            d += _timedelta(days=1)
+    return {"month": first.strftime("%Y-%m"), "today": _date.today().isoformat(),
+            "default_name": pl_names.get(DEFAULT_PLAYLIST, "Playlist padrão"), "days": days}
 
 
 def _pick_block(blocks: list[dict], kind: str, now_min: int) -> dict | None:
@@ -418,15 +634,18 @@ def _pick_block(blocks: list[dict], kind: str, now_min: int) -> dict | None:
 
 
 def resolve_now(con: sqlite3.Connection, now: datetime | None = None) -> dict:
-    """Decide o que a TV deve exibir agora, aplicando a regra de prioridade acima.
+    """Decide o que a TV deve exibir agora: escolhe a régua do dia (ruler_for_day) e aplica
+    a regra de prioridade dentro dela (veja o comentário no topo desta seção).
 
-    `slot` identifica a decisão: quando muda (ex.: deu 12:00 e entrou outro bloco),
-    o player interrompe o item atual e troca de conteúdo.
+    `slot` identifica a decisão: quando muda (ex.: deu 12:00 e entrou outro bloco, ou virou
+    o dia e a régua é outra), o player interrompe o item atual e troca de conteúdo.
     """
     now = now or datetime.now()
     m = now.hour * 60 + now.minute
-    blocks = [dict(r) for r in con.execute("SELECT * FROM schedule")]
+    scope = ruler_for_day(now.date(), _custom_scopes(con))
+    blocks = _blocks_of(con, scope)
     names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM playlists")}
+    ruler = {"scope": scope, "label": scope_label(scope)}
 
     def items_of(pid: str) -> list[dict]:
         rows = con.execute("SELECT * FROM items WHERE playlist_id=? AND active=1 ORDER BY ord, created_at", (pid,))
@@ -436,19 +655,19 @@ def resolve_now(con: sqlite3.Connection, now: datetime | None = None) -> dict:
     if overlay:
         row = con.execute("SELECT * FROM items WHERE id=? AND active=1", (overlay["ref_id"],)).fetchone()
         if row:
-            return {"slot": f"item:{overlay['id']}", "items": [item_dict(row)],
+            return {"slot": f"item:{overlay['id']}", "items": [item_dict(row)], "ruler": ruler,
                     "source": {"kind": "item", "name": row["name"], "until": _hhmm(overlay["end_min"])}}
 
     base = _pick_block(blocks, "playlist", m)
     if base:
         its = items_of(base["ref_id"])
         if its:
-            return {"slot": f"playlist:{base['id']}", "items": its,
+            return {"slot": f"playlist:{base['id']}", "items": its, "ruler": ruler,
                     "source": {"kind": "playlist", "name": names.get(base["ref_id"], "Playlist"),
                                "until": _hhmm(base["end_min"])}}
 
     upcoming = [b["start_min"] for b in blocks if b["start_min"] > m]
-    return {"slot": "default", "items": items_of(DEFAULT_PLAYLIST),
+    return {"slot": "default", "items": items_of(DEFAULT_PLAYLIST), "ruler": ruler,
             "source": {"kind": "default", "name": names.get(DEFAULT_PLAYLIST, "Playlist padrão"),
                        "until": _hhmm(min(upcoming)) if upcoming else None}}
 
@@ -1686,6 +1905,12 @@ def view_news(item_id: str):
     accent = _css_color(cfg.get("accent"), "#38bdf8")
     per = _num(cfg.get("per_headline"), 9, 4, 60)
     show_img = "true" if cfg.get("show_images", True) else "false"
+    # Logo Alava no cabeçalho (0.11.0; config.show_logo, ligado por padrão).
+    # Usa assets/watermark.png (versão branca, fundo transparente): é a de melhor contraste
+    # no fundo azul-escuro desta tela. As outras (minimalista azul-marinho e "fundo branco")
+    # sumiriam no fundo escuro. Mesmo tamanho do logo das telas de clima e trânsito.
+    logo = ('<img class="logo" src="/assets/watermark.png" alt="Alava"><span class="sep"></span>'
+            if cfg.get("show_logo", True) else "")
     return HTMLResponse(f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -1693,6 +1918,12 @@ def view_news(item_id: str):
 html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5f9;font-family:'Segoe UI',system-ui,sans-serif}}
 .top{{position:fixed;top:0;left:0;right:0;height:11vh;display:flex;align-items:center;justify-content:space-between;padding:0 4vw}}
 .top h1{{font-size:3.4vh;font-weight:700;letter-spacing:.32em;text-transform:uppercase;color:{accent}}}
+/* Logo Alava: à esquerda do título, separada por um traço fino na cor de destaque.
+   Altura igual à do logo do clima/trânsito (4,2% da tela, mínimo 26 px) e leve transparência
+   para não competir com a manchete. Fica no cabeçalho, fora da área do cartão. */
+.top .brand{{display:flex;align-items:center;gap:1.6vw}}
+.top .logo{{height:clamp(26px,4.2vh,72px);width:auto;opacity:.9;display:block}}
+.top .sep{{width:2px;height:4.4vh;border-radius:2px;background:{accent};opacity:.55}}
 .top .clock{{font-size:4.2vh;font-weight:300;font-variant-numeric:tabular-nums;opacity:.85}}
 .card{{position:fixed;top:13vh;bottom:12vh;left:4vw;right:4vw;display:grid;grid-template-columns:46% 1fr;gap:4vw;align-items:center;
   transition:opacity .6s ease}}
@@ -1711,7 +1942,7 @@ html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5
 .empty{{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:4vh;color:#94a3b8;text-align:center}}
 </style></head>
 <body>
-<div class="top"><h1>{title}</h1><div class="clock" id="clock"></div></div>
+<div class="top"><div class="brand">{logo}<h1>{title}</h1></div><div class="clock" id="clock"></div></div>
 <div class="card" id="card"><div class="pic" id="pic"></div>
   <div><div class="meta" id="meta"></div><div class="headline" id="headline"></div><div class="summary" id="summary"></div></div></div>
 <div class="bottom"><span id="count"></span><div class="bar"><i id="bar"></i></div></div>

@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.10.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.11.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -66,15 +66,16 @@ Outras opções do player: `--port 8080`, `--channel msedge`, `--monitor 0 --scr
 
 ### Logo da Alava
 
-O logo aparece no canto superior esquerdo apenas nas telas de **clima** e **trânsito**. Sites, imagens,
-vídeos e mensagens aparecem sem alteração. O arquivo usado é `assets/watermark.png`.
+O logo aparece no canto superior esquerdo das telas de **clima**, **trânsito** e **notícias** (nas notícias,
+pode ser desligado no item). Sites, imagens, vídeos e mensagens aparecem sem alteração. O arquivo usado é `assets/watermark.png`.
 
 ## O que o painel faz
 
 | Aba                       | Para quê                                                                                                                                      |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Playlists**       | Criar playlists e adicionar sites, imagens, vídeos, clima, trânsito, mensagens, contadores regressivos e páginas HTML locais. Arrastar para reordenar, ativar/desativar, pré-visualizar. |
-| **Programação**   | Timeline de 00:00 a 23:59. Arraste playlists e itens da biblioteca, mova, redimensione pelas bordas ou digite os horários.                    |
+| **Programação**   | Timeline de 00:00 a 23:59, uma por **régua**: *Todos os dias*, cada dia da semana ou uma data. Arraste playlists e itens da biblioteca, mova, redimensione pelas bordas ou digite os horários. **↻ Repetir nos dias úteis** copia a régua para segunda a sexta. |
+| **Calendário**    | O mês inteiro: qual régua vale em cada dia, feriados e playlists agendadas. Clique num dia para criar uma exceção (ex.: feriado), pôr uma playlist o dia todo ou abrir a régua. |
 | **Configurações** | Cidade, coordenadas e código IBGE (clima e alertas do INMET), chave do Google Maps, cenários de teste da tela de clima.                      |
 
 ### Tipos de item com opções especiais
@@ -89,6 +90,18 @@ vídeos e mensagens aparecem sem alteração. O arquivo usado é `assets/waterma
 - **HTML local:** envie um `.html` (página única) ou um `.zip` com a página e seus arquivos (CSS, imagens, scripts). A página inicial do `.zip` é o `index.html`. Cada envio fica em `data/html/<id>/`.
 
 ### Como a TV decide o que exibir
+
+Primeiro, a **régua do dia**:
+
+1. **Exceção da data** (criada no Calendário ou escolhendo a data na Programação);
+2. senão, a **régua do dia da semana**, se aquele dia tiver uma própria;
+3. senão, a régua **Todos os dias**.
+
+A régua é escolhida inteira: um dia com régua própria ignora a de *Todos os dias*. Para mudar só um trecho,
+crie a régua própria copiando a de *Todos os dias* (é o botão padrão) e edite só o que muda. Uma régua própria
+vazia deixa o dia todo na Playlist padrão.
+
+Depois, **dentro da régua**:
 
 1. **Item avulso** agendado no horário: só ele aparece (sobrepõe a playlist).
 2. Senão, a **playlist** agendada no horário.
@@ -150,4 +163,4 @@ Ficam fora do Git: `.env` (senha), `data/` (banco, uploads e login do Chrome da 
   A prévia mostra um aviso nesses casos; na TV eles abrem normalmente.
 - **Alertas do INMET**: o endereço usado (`apiprevmet3.inmet.gov.br/avisos/ativos`) não é documentado oficialmente.
   Se sair do ar, a tela de clima continua funcionando e mostra o aviso "INMET indisponível" no lugar dos alertas. Para ver o aviso sem derrubar nada: `/view/weather?inmet=off` (ou o atalho "INMET indisponível" em Configurações).
-- A programação é diária (igual todos os dias) e usa o relógio do computador do servidor.
+- A programação usa o relógio do computador do servidor. Exceções de datas que já passaram continuam guardadas (não atrapalham; dá para removê-las no Calendário).
