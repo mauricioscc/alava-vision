@@ -22,6 +22,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
   - Listas de vídeos ("VÍDEOS: …") e chamadas "ao vivo" do g1 são ignoradas; "VÍDEO:" no singular só perde o prefixo.
   - Botão **Testar feeds** no formulário: mostra quantas manchetes passam pelo filtro, as 3 mais recentes e quais feeds falharam.
   - Cache de 10 min por feed e atualização em segundo plano junto com o clima, então a tela abre sem esperar a internet. Sem internet, mostra as últimas manchetes baixadas. Um feed fora do ar não derruba os outros.
+- **Curiosidades e datas** ("Hoje é Dia de…"):
+  - **Item 📅 Hoje é dia** para as playlists: mostra as datas comemorativas de hoje, o feriado do dia e "Amanhã é feriado" / "Faltam N dias para o feriado" (até 15 dias antes). Em dia sem nada, a TV pula o item.
+  - **"Aparecer curiosidades durante o horário de serviço"** (Configurações): a TV intercala essa tela na playlist no ar, num horário (padrão 08:00–18:00), a cada N minutos (padrão 30) e por N segundos (padrão 15). Não interrompe item avulso agendado.
+  - **Lista curada** com 66 datas (comemorações, profissões, saúde, datas do Rio como São Sebastião e São Jorge), em `conteudo/datas_comemorativas.txt`. A lista em uso fica em `data/datas_comemorativas.txt` e é editada no painel, com validação linha a linha e botão para restaurar a padrão. Atualizar o sistema não apaga as alterações. Aceita datas fixas (`DD/MM`), móveis (`2º domingo/05` para o Dia das Mães, `último sábado/03`) e por dia do ano (`dia 256`, o Dia do Programador, que cai em 12/09 nos anos bissextos).
+  - **Feriados nacionais** da BrasilAPI, guardados em `data/feriados_AAAA.json` (depois de baixados, funcionam sem internet). Se a BrasilAPI estiver fora, tenta de novo só depois de 1 h, para não atrasar a TV. Quando a lista tem uma data com nome parecido no dia do feriado, só a da lista aparece; Carnaval de segunda não anuncia "amanhã é feriado" para a terça.
+  - Não usa a Wikipedia "neste dia", que no teste trouxe o massacre de Jonestown como primeiro fato do dia.
+  - Testar qualquer dia: `/view/today?d=AAAA-MM-DD`, ou o campo "Testar outro dia" nas Configurações.
 
 #### Alterado
 - O texto da mensagem agora é exibido como texto puro. Antes, um `<b>` digitado era interpretado como HTML; agora aparece literalmente. Para páginas com HTML, use o widget **HTML local**.

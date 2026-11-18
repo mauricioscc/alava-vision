@@ -43,6 +43,7 @@
       indicador de horário atual ... #now-line, updateNowLine()
       salvar ....................... scheduleSave(), saveSchedule()  → PUT /api/schedule
     Configurações .................. #tab-settings, loadSettings(), saveSettings()
+      curiosidades e datas ......... #card-today (#s-today-*, #s-curio), saveCuriosities(), resetCuriosities()
 -->
 <html lang="pt-BR">
 <head>
@@ -158,6 +159,8 @@ button,input,select,textarea{font-family:inherit}
 .badge-html{background:color-mix(in srgb,#ef4444 15%,transparent);color:#dc2626}
 .badge-countdown{background:color-mix(in srgb,#14b8a6 15%,transparent);color:#0d9488}
 .badge-news{background:color-mix(in srgb,#65a30d 15%,transparent);color:#4d7c0f}
+.badge-today{background:color-mix(in srgb,#d97706 15%,transparent);color:#b45309}
+.curio-list{font-family:Consolas,'Courier New',monospace;font-size:12.5px;line-height:1.55;min-height:300px;white-space:pre}
 .feed-list{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}
 .news-test{font-size:12px;color:var(--soft);line-height:1.5;white-space:pre-line}
 .check-line{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px}
@@ -469,6 +472,38 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
       <div style="margin-top:16px"><button class="btn btn-primary" onclick="saveSettings()">Salvar configurações</button></div>
     </div>
 
+    <div class="card" style="margin-top:16px" id="card-today">
+      <div class="section-title">📅 Curiosidades e datas</div>
+      <p class="hint" style="margin-bottom:12px">"Hoje é Dia de…", feriado do dia e "Faltam N dias para o feriado". Os feriados nacionais
+        vêm da BrasilAPI. As datas comemorativas vêm da lista abaixo, que você pode editar.</p>
+      <label class="check-line" style="margin-bottom:10px"><input type="checkbox" id="s-today-auto">
+        <b>Aparecer curiosidades durante o horário de serviço</b></label>
+      <div class="settings-grid">
+        <div class="form-group"><label for="s-today-start">Das</label><input type="time" id="s-today-start" value="08:00"></div>
+        <div class="form-group"><label for="s-today-end">Até</label><input type="time" id="s-today-end" value="18:00"></div>
+        <div class="form-group"><label for="s-today-every">A cada (minutos)</label><input type="number" id="s-today-every" value="30" min="5" max="240"></div>
+        <div class="form-group"><label for="s-today-dur">Tempo na tela (segundos)</label><input type="number" id="s-today-dur" value="15" min="5" max="120"></div>
+      </div>
+      <p class="hint" style="margin-top:6px">Ligado, a TV intercala a tela de curiosidades na playlist que estiver no ar (não interrompe um item avulso agendado).
+        Em dia sem data cadastrada nem feriado próximo, nada aparece. Também dá para pôr o item <b>📅 Hoje é dia</b> numa playlist.</p>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" onclick="saveSettings()">Salvar</button>
+        <a class="btn btn-ghost btn-sm" href="/view/today" target="_blank">Ver a tela de hoje</a>
+        <span class="hint">Testar outro dia:</span><input type="date" id="s-today-test" style="width:auto" aria-label="Dia para testar">
+        <button class="btn btn-ghost btn-sm" onclick="if($('s-today-test').value)open('/view/today?d='+$('s-today-test').value,'_blank')">Ver</button>
+      </div>
+
+      <div class="form-group" style="margin-top:18px">
+        <label for="s-curio">Lista de datas comemorativas <span class="hint">(uma por linha: <code>DD/MM | Título | Texto</code> ·
+          datas móveis: <code>2º domingo/05</code> · dia do ano: <code>dia 256</code> · linhas com # são ignoradas)</span></label>
+        <textarea id="s-curio" class="curio-list" spellcheck="false"></textarea>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="saveCuriosities()">Salvar lista</button>
+        <button class="btn btn-ghost" onclick="resetCuriosities()">Restaurar lista padrão</button>
+      </div>
+    </div>
+
     <div class="card" style="margin-top:16px">
       <div class="section-title">Pré-visualizar tela de clima</div>
       <p class="hint" style="margin-bottom:12px">Abre a tela em uma nova aba. Os cenários de teste simulam condições sem alterar a previsão real.</p>
@@ -512,6 +547,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <button class="type-tab" data-type="countdown" onclick="setType('countdown')">⏳ Contador</button>
           <button class="type-tab" data-type="html" onclick="setType('html')">📄 HTML local</button>
           <button class="type-tab" data-type="news" onclick="setType('news')">📰 Notícias</button>
+          <button class="type-tab" data-type="today" onclick="setType('today')">📅 Hoje é dia</button>
         </div>
       </div>
 
@@ -555,6 +591,13 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <div id="html-drop-text">📁 Clique ou arraste a página aqui<br><span class="hint">.html (página única) ou .zip (página com CSS, imagens e scripts)</span></div>
         </label>
         <p class="hint">No .zip, a página inicial é o <b>index.html</b>. Links relativos (ex.: <code>css/estilo.css</code>) funcionam normalmente.</p>
+      </div>
+
+      <div id="cfg-today" hidden>
+        <p class="hint" style="color:var(--soft)">Mostra as datas comemorativas de hoje ("Hoje é Dia do Professor"), o feriado do dia
+          e quantos dias faltam para o próximo feriado. Em dia sem nada para mostrar, a TV pula este item sozinha.<br><br>
+          A lista de datas e as <b>curiosidades automáticas durante o horário de serviço</b> ficam em
+          <a href="#" onclick="closeModal();showTab('settings');setTimeout(()=>$('card-today').scrollIntoView({behavior:'smooth'}),100);return false">Configurações → Curiosidades e datas</a>.</p>
       </div>
 
       <div id="cfg-news" hidden class="form-group" style="gap:12px">
@@ -747,9 +790,9 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const uid = () => Math.random().toString(16).slice(2, 14).padEnd(12, '0');
-const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬',countdown:'⏳',html:'📄',news:'📰'};
-const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem',countdown:'Contador',html:'HTML local',news:'Notícias'};
-const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e',countdown:'#14b8a6',html:'#ef4444',news:'#65a30d'};
+const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬',countdown:'⏳',html:'📄',news:'📰',today:'📅'};
+const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem',countdown:'Contador',html:'HTML local',news:'Notícias',today:'Hoje é dia'};
+const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e',countdown:'#14b8a6',html:'#ef4444',news:'#65a30d',today:'#d97706'};
 const ALL_TYPES = Object.keys(TYPE_NAMES);
 const PL_COLOR = '#6366f1';
 const store = {
@@ -1266,9 +1309,9 @@ function setType(t) {
   document.querySelectorAll('.type-tab').forEach(b => b.classList.toggle('active', b.dataset.type === t));
   showCfgPanel(t);
   const names = {url:'Site', image:'Imagem', video:'Vídeo', weather:'Previsão do Tempo', traffic:'Trânsito',
-                 message:'Mensagem', countdown:'Contador regressivo', html:'Página HTML', news:'Notícias'};
+                 message:'Mensagem', countdown:'Contador regressivo', html:'Página HTML', news:'Notícias', today:'Hoje é dia'};
   if (!$('f-name').value || Object.values(names).includes($('f-name').value)) $('f-name').value = names[t];
-  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30, news:45}[t] || 30;
+  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30, news:45, today:15}[t] || 30;
   if (t === 'news') setNewsForm({});
   if (t === 'message') msgPreviewSoon();
 }
@@ -1362,7 +1405,7 @@ async function uploadFile(file, type) {
 function previewSrc(item) {
   if (item.type === 'url') return item.config?.url || '';
   if (item.type === 'html') return item.config?.url || '';   // a própria página enviada (/html/...)
-  if (item.type === 'weather' || item.type === 'traffic') return `/view/${item.type}`;
+  if (item.type === 'weather' || item.type === 'traffic' || item.type === 'today') return `/view/${item.type}`;
   return `/view/${item.type}/${item.id}`;
 }
 
@@ -1769,6 +1812,12 @@ async function loadSettings() {
   $('s-lon').value = s.weather_lon || '';
   $('s-maps').value = s.maps_api_key || '';
   $('s-ibge').value = s.ibge_code || '';
+  $('s-today-auto').checked = s.today_auto === '1';
+  $('s-today-start').value = s.today_start || '08:00';
+  $('s-today-end').value = s.today_end || '18:00';
+  $('s-today-every').value = s.today_every || 30;
+  $('s-today-dur').value = s.today_duration || 15;
+  try { $('s-curio').value = (await api('GET', '/api/curiosities')).text; } catch(e) {}
   // Atalhos de crepúsculo/amanhecer: simulam o horário (?hora=) a partir do pôr/nascer do sol de hoje.
   try {
     const w = await api('GET', '/api/weather');
@@ -1785,9 +1834,24 @@ async function saveSettings() {
       weather_city: $('s-city').value.trim(), weather_lat: $('s-lat').value.trim(),
       weather_lon: $('s-lon').value.trim(), maps_api_key: $('s-maps').value.trim(),
       ibge_code: $('s-ibge').value.trim(),
+      today_auto: $('s-today-auto').checked ? '1' : '0',
+      today_start: $('s-today-start').value || '08:00', today_end: $('s-today-end').value || '18:00',
+      today_every: parseInt($('s-today-every').value) || 30, today_duration: parseInt($('s-today-dur').value) || 15,
     });
     status('Configurações salvas');
   } catch(e) { status('Erro ao salvar: ' + e.message, 'err'); }
+}
+
+async function saveCuriosities() {
+  try {
+    const r = await api('PUT', '/api/curiosities', {text: $('s-curio').value});
+    status(`Lista salva: ${r.count} datas`);
+  } catch(e) { status(e.message, 'err'); }
+}
+async function resetCuriosities() {
+  if (!confirm('Trocar a lista atual pela lista padrão do sistema? Suas alterações nela serão perdidas.')) return;
+  try { $('s-curio').value = (await api('POST', '/api/curiosities/reset')).text; status('Lista padrão restaurada'); }
+  catch(e) { status('Erro: ' + e.message, 'err'); }
 }
 
 // ═══ NAVEGAÇÃO E INICIALIZAÇÃO ════════════════════════════════════════════════

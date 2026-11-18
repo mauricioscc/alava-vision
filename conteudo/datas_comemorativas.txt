@@ -1,0 +1,100 @@
+# Alava Vision — Datas comemorativas ("Hoje é Dia de…") · lista padrão da versão 0.10.0
+#
+# Esta é a lista que vem com o sistema. A lista em uso fica em data/datas_comemorativas.txt
+# (criada a partir desta na primeira vez) e é editada no painel: Configurações → Curiosidades e datas.
+# Atualizar o sistema NÃO apaga as suas alterações.
+#
+# FORMATO: uma data por linha, três partes separadas por |
+#     DD/MM            | Título           | Texto (opcional)
+#     2º domingo/05    | Dia das Mães     | ...      → datas móveis: 1º a 5º (ou "último") dia da semana do mês
+#     dia 256          | Dia do Programador | ...    → número do dia no ano
+# Linhas começando com # são ignoradas. Feriados nacionais vêm da BrasilAPI automaticamente.
+# Se a lista tem, no dia do feriado, uma data com nome parecido (ex.: "Dia do Trabalhador" e o
+# feriado "Dia do trabalho"), só a da lista aparece, com o seu texto. Com nomes diferentes
+# (12/10: "Dia das Crianças" e "Nossa Senhora Aparecida"), aparecem as duas.
+
+# ── Janeiro ──
+01/01 | Confraternização Universal | Feliz Ano Novo! Que este ano traga saúde, conquistas e bons projetos para toda a equipe.
+07/01 | Dia do Leitor | Qual foi o último livro que você leu? Que tal compartilhar uma indicação com os colegas?
+20/01 | Dia de São Sebastião | Padroeiro da cidade do Rio de Janeiro. Feriado municipal no Rio.
+30/01 | Dia da Saudade | Um bom dia para mandar uma mensagem para alguém que você não vê há algum tempo.
+
+# ── Fevereiro e março ──
+16/02 | Dia do Repórter | Uma homenagem aos profissionais que apuram e contam as notícias do dia a dia.
+08/03 | Dia Internacional da Mulher | Uma data para reconhecer conquistas e seguir avançando em igualdade e respeito.
+12/03 | Dia do Bibliotecário | Bibliotecas organizam e preservam o conhecimento. Visite uma!
+15/03 | Dia Mundial dos Direitos do Consumidor | Conhecer seus direitos ajuda a fazer escolhas melhores.
+21/03 | Dia Internacional da Síndrome de Down | A data 21/3 lembra os três cromossomos 21. Inclusão se faz no dia a dia.
+22/03 | Dia Mundial da Água | Fechar a torneira enquanto escova os dentes economiza milhares de litros por ano.
+
+# ── Abril ──
+07/04 | Dia Mundial da Saúde | Beba água, levante-se de vez em quando e cuide de você.
+18/04 | Dia Nacional do Livro Infantil | A data homenageia o nascimento de Monteiro Lobato, em 18 de abril de 1882.
+19/04 | Dia dos Povos Indígenas | Uma data para valorizar a diversidade e a cultura dos povos originários do Brasil.
+21/04 | Tiradentes | Feriado nacional em memória de Joaquim José da Silva Xavier, o Tiradentes, herói da Inconfidência Mineira.
+22/04 | Descobrimento do Brasil | Em 22 de abril de 1500, a esquadra de Pedro Álvares Cabral chegou ao litoral da Bahia.
+23/04 | Dia de São Jorge | Feriado estadual no Rio de Janeiro. Também é o Dia Mundial do Livro.
+28/04 | Dia Mundial da Segurança e Saúde no Trabalho | Prevenção é responsabilidade de todos. Use os equipamentos de proteção.
+
+# ── Maio ──
+01/05 | Dia do Trabalhador | Uma homenagem a todos que constroem o dia a dia com o seu trabalho.
+12/05 | Dia do Enfermeiro | Obrigado aos profissionais de enfermagem pelo cuidado de todos os dias.
+13/05 | Abolição da Escravatura | Em 13 de maio de 1888, a Lei Áurea aboliu a escravidão no Brasil.
+2º domingo/05 | Dia das Mães | Feliz Dia das Mães a todas as mães da nossa equipe e das nossas famílias!
+25/05 | Dia da Indústria | Uma homenagem a quem transforma ideias e matérias-primas em produtos.
+31/05 | Dia Mundial sem Tabaco | Parar de fumar traz benefícios à saúde já nas primeiras semanas.
+
+# ── Junho e julho ──
+05/06 | Dia Mundial do Meio Ambiente | Separe o lixo reciclável e evite copos descartáveis.
+12/06 | Dia dos Namorados | Um dia para celebrar o carinho e a parceria.
+24/06 | Dia de São João | Época de festa junina: quentão, pipoca, quadrilha e muita alegria!
+10/07 | Dia da Pizza | Calabresa, marguerita ou portuguesa: qual é a sua preferida?
+13/07 | Dia Mundial do Rock | A data lembra o festival Live Aid, de 13 de julho de 1985.
+20/07 | Dia do Amigo | Também é o aniversário da chegada do homem à Lua, em 20 de julho de 1969.
+25/07 | Dia do Motorista | Obrigado a quem nos leva e traz todos os dias. No trânsito, gentileza gera gentileza.
+26/07 | Dia dos Avós | Um carinho especial para os avós da nossa equipe.
+
+# ── Agosto ──
+11/08 | Dia do Estudante | Também é o Dia do Advogado: a data lembra a criação dos primeiros cursos de Direito do Brasil, em 1827.
+12/08 | Dia Internacional da Juventude | Uma data da ONU para valorizar o papel dos jovens na sociedade.
+2º domingo/08 | Dia dos Pais | Feliz Dia dos Pais a todos os pais da nossa equipe e das nossas famílias!
+22/08 | Dia do Folclore | Saci, Curupira, Iara: o folclore brasileiro é cheio de histórias.
+25/08 | Dia do Soldado | A data homenageia o nascimento de Duque de Caxias, patrono do Exército Brasileiro.
+27/08 | Dia do Psicólogo | Cuidar da saúde mental também é cuidar da saúde.
+
+# ── Setembro ──
+07/09 | Independência do Brasil | Em 7 de setembro de 1822, D. Pedro proclamou a independência do Brasil.
+09/09 | Dia do Administrador | Uma homenagem a quem planeja, organiza e faz as coisas acontecerem.
+dia 256 | Dia do Programador | Comemorado no 256º dia do ano, porque 256 é 2⁸, um número especial na computação.
+15/09 | Dia do Cliente | Obrigado a todos os nossos clientes pela confiança!
+21/09 | Dia da Árvore | Uma árvore adulta pode absorver dezenas de quilos de gás carbônico por ano.
+22/09 | Dia do Contador | Uma homenagem aos profissionais que cuidam das contas e da saúde financeira das empresas.
+30/09 | Dia da Secretária | Obrigado aos profissionais de secretariado pela organização de todos os dias.
+
+# ── Outubro ──
+01/10 | Dia Internacional da Pessoa Idosa | Uma data da ONU para valorizar a experiência e os direitos das pessoas idosas.
+04/10 | Dia Mundial dos Animais | A data lembra São Francisco de Assis, protetor dos animais.
+12/10 | Dia das Crianças | Brincar faz bem em qualquer idade. Um abraço às crianças das famílias da nossa equipe!
+15/10 | Dia do Professor | Obrigado a todos os professores que fizeram parte da nossa história.
+16/10 | Dia Mundial da Alimentação | Data da FAO, a agência da ONU para a alimentação e a agricultura.
+18/10 | Dia do Médico | Obrigado aos médicos pelo cuidado com a nossa saúde.
+28/10 | Dia do Servidor Público | Uma homenagem a quem trabalha pelos serviços públicos.
+29/10 | Dia Nacional do Livro | A data lembra a fundação da Biblioteca Nacional, em 29 de outubro de 1810.
+31/10 | Dia Nacional da Poesia | A data homenageia o nascimento de Carlos Drummond de Andrade, em 31 de outubro de 1902.
+
+# ── Novembro ──
+02/11 | Finados | Dia de lembrar com carinho de quem já se foi.
+14/11 | Dia Mundial do Diabetes | Medir a glicose regularmente ajuda no diagnóstico precoce.
+15/11 | Proclamação da República | Em 15 de novembro de 1889, o Brasil se tornou uma república.
+19/11 | Dia da Bandeira | A bandeira atual foi adotada em 19 de novembro de 1889, quatro dias após a Proclamação da República.
+20/11 | Dia de Zumbi e da Consciência Negra | Feriado nacional. Uma data para refletir sobre a história e a luta contra o racismo.
+25/11 | Dia Nacional do Doador de Sangue | Uma única doação pode ajudar a salvar várias vidas.
+
+# ── Dezembro ──
+01/12 | Dia Mundial de Luta contra a AIDS | Informação e prevenção salvam vidas.
+10/12 | Dia Internacional dos Direitos Humanos | A Declaração Universal dos Direitos Humanos foi adotada em 10 de dezembro de 1948.
+11/12 | Dia do Engenheiro | Uma homenagem a quem projeta e constrói soluções para o dia a dia.
+15/12 | Dia do Arquiteto | A data homenageia o nascimento de Oscar Niemeyer, em 15 de dezembro de 1907.
+24/12 | Véspera de Natal | Boas festas a todos!
+25/12 | Natal | Feliz Natal! Que a data seja de paz e alegria com quem você ama.
+31/12 | Véspera de Ano Novo | Obrigado pelo ano de trabalho juntos. Boas festas e até o ano que vem!

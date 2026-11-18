@@ -67,6 +67,11 @@ MAPA DO CÓDIGO
       notícias (RSS) ................ /view/news/{id}, GET /api/news/{id}, POST /api/news-test,
                                       get_news() (filtro, sem repetidas), _fetch_feed() (cache NEWS_TTL),
                                       _parse_feed() (RSS e Atom), _warm_news() (em 2º plano, com o clima)
+      curiosidades e datas .......... /view/today (?d=AAAA-MM-DD), GET /api/today, GET/PUT /api/curiosities,
+                                      POST /api/curiosities/reset, today_info(), parse_curio(), holidays()
+                                      (BrasilAPI → data/feriados_AAAA.json), today_auto_settings();
+                                      lista: conteudo/datas_comemorativas.txt → data/datas_comemorativas.txt
+                                      current_state()['today'] = {count, auto} para o player
       mensagem ...................... view_message() e view_message_preview() → _render_message()
                                       (fundo sólido/degradê/imagem, MSG_FONTS, MSG_ANIMS, _css_color())
     Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
@@ -452,6 +457,13 @@ def current_state() -> dict:
         ver = con.execute("SELECT val FROM version WHERE id=1").fetchone()
     state["version"] = ver["val"] if ver else 0
     state["server_time"] = datetime.now().strftime("%H:%M")
+    # Curiosidades: quantos cartões há hoje (o player pula o item "today" se for 0) e as
+    # regras das curiosidades automáticas, que o player intercala na playlist.
+    try:
+        state["today"] = {"count": today_info()["count"], "auto": today_auto_settings()}
+    except Exception as e:
+        print(f"[curiosidades] {e}")
+        state["today"] = {"count": 0, "auto": {"enabled": False}}
     return state
 
 
@@ -475,7 +487,9 @@ _push_task: asyncio.Task | None = None
 
 
 def _signature(state: dict) -> tuple:
-    return state.get("version"), state.get("slot")
+    # "today" entra para o player saber na virada do dia (outras curiosidades) e quando as
+    # curiosidades automáticas mudam em Configurações (que não alteram a versão).
+    return state.get("version"), state.get("slot"), json.dumps(state.get("today"), sort_keys=True)
 
 
 async def _send(ws: WebSocket, text: str) -> None:
@@ -861,6 +875,187 @@ def api_news(item_id: str):
 async def api_news_test(request: Request):
     """Painel: testa os feeds digitados antes de salvar (mostra quantas manchetes e os erros)."""
     return await asyncio.to_thread(get_news, await request.json())
+
+
+# ─── Curiosidades e datas ("Hoje é Dia de…") ─────────────────────────────────
+#
+# Duas fontes, as duas previsíveis (decisão de 18/11/2026: nada de "neste dia" da Wikipedia,
+# que mistura tragédias):
+#   • lista curada em data/datas_comemorativas.txt (copiada de conteudo/ na 1ª vez, editável no painel);
+#   • feriados nacionais da BrasilAPI, guardados em data/feriados_AAAA.json (funciona sem internet depois).
+# today_info() monta os "cartões" do dia: datas da lista; senão o feriado de hoje; e, se faltar
+# pouco para um feriado, um aviso "Faltam N dias". O item "today" e as curiosidades automáticas
+# (Configurações) usam a mesma tela /view/today.
+
+CURIO_DEFAULT = BASE / "conteudo" / "datas_comemorativas.txt"
+CURIO_FILE = DATA_DIR / "datas_comemorativas.txt"
+WEEKDAYS_PT = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+MONTHS_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+             "setembro", "outubro", "novembro", "dezembro"]
+
+
+def curio_text() -> str:
+    if not CURIO_FILE.exists() and CURIO_DEFAULT.exists():
+        CURIO_FILE.write_text(CURIO_DEFAULT.read_text(encoding="utf-8"), encoding="utf-8")
+    return CURIO_FILE.read_text(encoding="utf-8") if CURIO_FILE.exists() else ""
+
+
+def parse_curio(text: str) -> tuple[list[dict], list[str]]:
+    """Linhas "quando | título | texto" → (datas, erros com o número da linha)."""
+    import re
+    out, errors = [], []
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 2 or not parts[1]:
+            errors.append(f"linha {n}: use  data | título | texto")
+            continue
+        when, title, body = parts[0].lower(), parts[1], " | ".join(parts[2:])
+        e = {"title": title, "text": body}
+        if m := re.fullmatch(r"(\d{1,2})/(\d{1,2})", when):
+            d, mo = int(m[1]), int(m[2])
+            try:
+                datetime(2024, mo, d)   # 2024 é bissexto: aceita 29/02
+            except ValueError:
+                errors.append(f"linha {n}: data inválida '{parts[0]}'")
+                continue
+            e["rule"] = ("dm", d, mo)
+        elif m := re.fullmatch(r"(\d|último|ultimo)\s*[ºª°oa]?\s*(\w+?)(?:-feira)?\s*/\s*(\d{1,2})", when):
+            plain = lambda s: s.replace("á", "a").replace("ç", "c")   # "sabado" = "sábado", "terca" = "terça"
+            wd = next((i for i, w in enumerate(WEEKDAYS_PT) if plain(w).startswith(plain(m[2])[:3])), None)
+            nth = -1 if m[1].startswith("ú") or m[1].startswith("u") else int(m[1])
+            if wd is None or not 1 <= int(m[3]) <= 12 or nth == 0 or nth > 5:
+                errors.append(f"linha {n}: não entendi '{parts[0]}' (ex.: 2º domingo/05)")
+                continue
+            e["rule"] = ("nth", nth, wd, int(m[3]))
+        elif m := re.fullmatch(r"dia\s+(\d{1,3})", when):
+            e["rule"] = ("yday", int(m[1]))
+        else:
+            errors.append(f"linha {n}: não entendi a data '{parts[0]}' (use DD/MM, 2º domingo/05 ou dia 256)")
+            continue
+        out.append(e)
+    return out, errors
+
+
+def _curio_matches(rule: tuple, day) -> bool:
+    import calendar
+    kind = rule[0]
+    if kind == "dm":
+        return day.day == rule[1] and day.month == rule[2]
+    if kind == "yday":
+        return day.timetuple().tm_yday == rule[1]
+    _, nth, wd, month = rule
+    if day.month != month or day.weekday() != wd:
+        return False
+    if nth == -1:
+        return day.day + 7 > calendar.monthrange(day.year, month)[1]
+    return (day.day - 1) // 7 + 1 == nth
+
+
+_hol_failed: dict[int, float] = {}   # ano → quando a BrasilAPI falhou (tenta de novo depois de 1 h)
+
+
+def holidays(year: int) -> list[dict]:
+    cache = DATA_DIR / f"feriados_{year}.json"
+    if cache.exists():
+        try:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        except ValueError:
+            pass
+    # Sem internet, não tenta a cada consulta (cada tentativa espera até 8 s).
+    if time.time() - _hol_failed.get(year, 0) < 3600:
+        return []
+    try:
+        data = _http_json(f"https://brasilapi.com.br/api/feriados/v1/{year}", timeout=8)
+        cache.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return data
+    except Exception as e:
+        _hol_failed[year] = time.time()
+        print(f"[curiosidades] feriados de {year} indisponíveis: {e}")
+        return []
+
+
+TODAY_SOON_DAYS = 15   # aviso "Faltam N dias para o feriado" a partir de 15 dias antes
+
+
+def _stems(s: str) -> set[str]:
+    """Radicais de 5 letras das palavras de 4+ letras: "Dia do Trabalhador" ~ "Dia do trabalho"."""
+    import re
+    return {w[:5] for w in re.findall(r"\w+", s.lower()) if len(w) >= 4}
+
+
+def today_info(day=None) -> dict:
+    from datetime import date, timedelta
+    day = day or date.today()
+    entries, _ = parse_curio(curio_text())
+    on = lambda d: [e for e in entries if _curio_matches(e["rule"], d)]
+    cards = [{"kind": "date", "eyebrow": "Hoje é", "title": e["title"], "text": e["text"]} for e in on(day)]
+    hol = {h["date"]: h["name"] for h in holidays(day.year) + holidays(day.year + 1)}
+    today_hol = hol.get(day.isoformat())
+    # Feriado de hoje: aparece, a não ser que a lista já tenha a mesma data com outro nome
+    # (20/11 "Dia de Zumbi e da Consciência Negra" = "Dia da consciência negra").
+    # Em 12/10 aparecem os dois: "Dia das Crianças" (lista) e "Nossa Senhora Aparecida" (feriado).
+    if today_hol and not any(_stems(e["title"]) & _stems(today_hol) for e in on(day)):
+        cards.insert(0, {"kind": "holiday", "eyebrow": "Hoje é feriado", "title": today_hol, "text": "Bom descanso!"})
+    for i in range(1, TODAY_SOON_DAYS + 1):
+        d = day + timedelta(days=i)
+        if d.isoformat() in hol:
+            if hol[d.isoformat()] == today_hol:   # Carnaval segunda → terça: é o mesmo feriado
+                break
+            named = on(d)   # nome da lista, se houver ("Dia de Zumbi…" em vez de "Dia da consciência negra")
+            title = next((e["title"] for e in named if _stems(e["title"]) & _stems(hol[d.isoformat()])), hol[d.isoformat()])
+            when = "Amanhã é feriado" if i == 1 else f"Faltam {i} dias para o feriado"
+            cards.append({"kind": "soon", "eyebrow": when, "title": title,
+                          "text": f"{WEEKDAYS_PT[d.weekday()].capitalize()}{'-feira' if d.weekday() < 5 else ''}, "
+                                  f"{d.day} de {MONTHS_PT[d.month - 1]}."})
+            break
+    label = f"{WEEKDAYS_PT[day.weekday()]}{'-feira' if day.weekday() < 5 else ''}, {day.day} de {MONTHS_PT[day.month - 1]}"
+    return {"date": day.isoformat(), "label": label, "cards": cards, "count": len(cards)}
+
+
+def today_auto_settings() -> dict:
+    """Curiosidades automáticas (Configurações): o player intercala a tela /view/today na playlist."""
+    s = load_settings()
+    return {"enabled": s.get("today_auto") == "1", "start": s.get("today_start") or "08:00",
+            "end": s.get("today_end") or "18:00", "every_min": _num(s.get("today_every"), 30, 5, 240),
+            "duration": _num(s.get("today_duration"), 15, 5, 120)}
+
+
+@app.get("/api/today")
+def api_today(d: str | None = None):
+    from datetime import date
+    try:
+        day = date.fromisoformat(d) if d else None
+    except ValueError:
+        raise HTTPException(400, "Data inválida (use AAAA-MM-DD)")
+    return today_info(day)
+
+
+@app.get("/api/curiosities", dependencies=[Depends(require_auth)])
+def get_curiosities():
+    return {"text": curio_text()}
+
+
+@app.put("/api/curiosities", dependencies=[Depends(require_auth)])
+async def save_curiosities(request: Request):
+    text = str((await request.json()).get("text", ""))
+    entries, errors = parse_curio(text)
+    if errors:
+        raise HTTPException(400, "Corrija antes de salvar: " + "; ".join(errors[:5]))
+    CURIO_FILE.write_text(text, encoding="utf-8")
+    with db() as con:
+        bump_version(con)
+        con.commit()
+    return {"ok": True, "count": len(entries)}
+
+
+@app.post("/api/curiosities/reset", dependencies=[Depends(require_auth)])
+def reset_curiosities():
+    """Volta para a lista que vem com o sistema (conteudo/datas_comemorativas.txt)."""
+    CURIO_FILE.write_text(CURIO_DEFAULT.read_text(encoding="utf-8"), encoding="utf-8")
+    return {"text": curio_text()}
 
 
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
@@ -1305,6 +1500,49 @@ def view_traffic():
 function tick(){{const n=new Date();document.getElementById('clock').textContent=
   String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');}}
 tick(); setInterval(tick, 1000);
+</script>""")
+
+
+@app.get("/view/today")
+def view_today(d: str | None = None, per: int = 0):
+    """Tela "Hoje é Dia de…". Vários cartões no dia: troca entre eles a cada `per` segundos
+    (padrão: 8). `?d=AAAA-MM-DD` mostra outro dia, para testar pelo painel.
+    """
+    info = api_today(d)
+    data = json.dumps(info, ensure_ascii=False).replace("</", "<\\/")
+    per_ms = _num(per, 8, 3, 60) * 1000
+    return view_html(f"""
+<style>
+  .td{{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+    padding:8vh 8vw;gap:3.4vh;color:#fff;transition:background 1s ease}}
+  .td.date{{background:radial-gradient(120% 120% at 20% 10%,#1e40af 0%,#0b1120 70%)}}
+  .td.holiday{{background:radial-gradient(120% 120% at 20% 10%,#047857 0%,#052e16 72%)}}
+  .td.soon{{background:radial-gradient(120% 120% at 20% 10%,#b45309 0%,#1c1206 72%)}}
+  .ico{{font-size:11vh;line-height:1}}
+  .eyebrow{{font-size:3.4vh;font-weight:700;letter-spacing:.35em;text-transform:uppercase;opacity:.8}}
+  .title{{font-size:9vh;font-weight:800;line-height:1.08;max-width:84vw}}
+  .text{{font-size:3.6vh;line-height:1.4;max-width:70vw;opacity:.88}}
+  .when{{position:fixed;bottom:5vh;left:0;right:0;text-align:center;font-size:2.6vh;opacity:.55;letter-spacing:.06em}}
+  .fade{{animation:f .8s ease both}} @keyframes f{{from{{opacity:0;transform:translateY(3vh)}}to{{opacity:1;transform:none}}}}
+</style>
+<div class="td date" id="td"><div class="ico" id="ico"></div><div class="eyebrow" id="eb"></div>
+  <div class="title" id="tt"></div><div class="text" id="tx"></div></div>
+<div class="when" id="when"></div>
+<script>
+const I = {data}, ICON = {{date: '📅', holiday: '🎉', soon: '⏳'}};
+const $ = id => document.getElementById(id);
+$('when').textContent = I.label;
+let k = 0;
+function show() {{
+  const c = I.cards[k % Math.max(1, I.cards.length)] ||
+            {{kind: 'date', eyebrow: 'Hoje', title: I.label, text: 'Nenhuma data especial cadastrada para hoje.'}};
+  $('td').className = 'td ' + c.kind;
+  for (const [id, v] of [['ico', ICON[c.kind]], ['eb', c.eyebrow], ['tt', c.title], ['tx', c.text]]) {{
+    const el = $(id); el.textContent = v || ''; el.classList.remove('fade'); void el.offsetWidth; el.classList.add('fade');
+  }}
+  k++;
+}}
+show(); if (I.cards.length > 1) setInterval(show, {per_ms});
 </script>""")
 
 

@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.9.0
+Alava Vision — Player (player.py) · versão 0.10.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -46,6 +46,8 @@ MAPA DO CÓDIGO
     Janela de horário de mensagens .. time_in_window()
     Contador que some após o fim .... countdown_visible()   (config.hide_after)
     Vídeo sem repetição ............. plays_once(), VIDEO_ENDED_JS  → avança quando o vídeo acaba
+    Curiosidades ("Hoje é dia") ..... today_count() (pula o item em dia sem nada),
+                                      curiosity_due() → intercala /view/today (Configurações)
     URL de cada tipo de item ........ item_url()
     Loop de exibição ................ run()
     Parâmetros de linha de comando .. main()
@@ -64,7 +66,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -238,11 +240,36 @@ def plays_once(item: dict) -> bool:
 VIDEO_ENDED_JS = "() => { const v = document.querySelector('video'); return !!(v && v.ended); }"
 
 
+def today_count(state: dict) -> int:
+    return int((state.get("today") or {}).get("count") or 0)
+
+
+def curiosity_due(state: dict, last_shown: float) -> dict | None:
+    """Curiosidades automáticas (Configurações → Curiosidades e datas).
+
+    Devolve um item "today" para intercalar AGORA, ou None. Regras: opção ligada, há algo
+    para hoje, dentro do horário de serviço, já passou o intervalo desde a última vez e a
+    TV não está num item avulso agendado (que, pela regra da grade, ocupa a tela sozinho).
+    """
+    auto = (state.get("today") or {}).get("auto") or {}
+    if not auto.get("enabled") or today_count(state) == 0:
+        return None
+    if (state.get("source") or {}).get("kind") == "item":
+        return None
+    now = datetime.now().strftime("%H:%M")
+    if not (auto.get("start", "08:00") <= now < auto.get("end", "18:00")):
+        return None
+    if time.time() - last_shown < int(auto.get("every_min", 30)) * 60:
+        return None
+    return {"id": "auto", "type": "today", "name": "Curiosidade do dia", "active": 1,
+            "duration": int(auto.get("duration", 15)), "config": {}}
+
+
 def item_url(item: dict, server: str) -> str:
     t = item["type"]
     if t == "url":
         return item["config"].get("url", "about:blank")
-    if t in ("weather", "traffic"):
+    if t in ("weather", "traffic", "today"):
         return f"{server}/view/{t}"
     return f"{server}/view/{t}/{item['id']}"
 
@@ -318,6 +345,7 @@ def run(args, push: PushChannel):
             state: dict = {"items": []}
             idx = 0
             current_url = None
+            last_curiosity = 0.0   # 0 = a primeira curiosidade automática pode aparecer logo
 
             while True:
                 pushed = push.current()
@@ -330,7 +358,8 @@ def run(args, push: PushChannel):
                         log("Sem API, usando última programação:", e)
 
                 items = [x for x in state.get("items", [])
-                         if x.get("active") and time_in_window(x.get("config", {})) and countdown_visible(x)]
+                         if x.get("active") and time_in_window(x.get("config", {})) and countdown_visible(x)
+                         and (x.get("type") != "today" or today_count(state) > 0)]
 
                 if not items:
                     page.set_content(IDLE_HTML)
@@ -344,8 +373,12 @@ def run(args, push: PushChannel):
                     continue
 
                 idx %= len(items)
-                item = items[idx]
-                idx += 1
+                extra = curiosity_due(state, last_curiosity)
+                if extra:                        # intercala sem avançar a playlist
+                    item, last_curiosity = extra, time.time()
+                else:
+                    item = items[idx]
+                    idx += 1
                 duration = max(3, int(item.get("duration", 30)))
                 url = item_url(item, server)
                 src = state.get("source") or {}
