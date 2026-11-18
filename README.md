@@ -17,12 +17,12 @@ Pré-requisitos: **Python 3.10+** (marque "Add Python to PATH" na instalação),
    pergunta a senha do painel, a porta (avisa se já estiver em uso) e o monitor da TV, e oferece
    iniciar com o Windows.
 
-| Arquivo | Para quê |
-|---|---|
-| `instalar.bat` | Instalação (uma vez). Pode ser rodado de novo: mantém o `.env` e os dados. |
-| `iniciar_alava_vision.bat` | Abre o servidor e, quando ele responde, o player na TV. |
-| `atualizar.bat` | Fecha o sistema, baixa a versão nova do GitHub (`git pull`), atualiza as bibliotecas, mostra as novidades e reabre. Não mexe no `.env` nem em `data/`. |
-| `startup.bat` | Liga ou desliga o início automático com o Windows (atalho em `shell:startup` para o `iniciar_alava_vision.bat`). |
+| Arquivo                      | Para quê                                                                                                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instalar.bat`             | Instalação (uma vez). Pode ser rodado de novo: mantém o `.env` e os dados.                                                                                |
+| `iniciar_alava_vision.bat` | Abre o servidor e, quando ele responde, o player na TV.                                                                                                        |
+| `atualizar.bat`            | Fecha o sistema, baixa a versão nova do GitHub (`git pull`), atualiza as bibliotecas, mostra as novidades e reabre. Não mexe no `.env` nem em `data/`. |
+| `startup.bat`              | Liga ou desliga o início automático com o Windows (atalho em `shell:startup` para o `iniciar_alava_vision.bat`).                                         |
 
 O início automático acontece quando o usuário entra no Windows. Para a TV voltar sozinha depois de uma queda
 de energia, o PC precisa entrar no Windows sem senha (login automático) e ligar sozinho quando a energia volta
@@ -71,11 +71,11 @@ vídeos e mensagens aparecem sem alteração. O arquivo usado é `assets/waterma
 
 ## O que o painel faz
 
-| Aba | Para quê |
-|---|---|
-| **Playlists** | Criar playlists e adicionar sites, imagens, vídeos, clima, trânsito e mensagens. Arrastar para reordenar, ativar/desativar, pré-visualizar. |
-| **Programação** | Timeline de 00:00 a 23:59. Arraste playlists e itens da biblioteca, mova, redimensione pelas bordas ou digite os horários. |
-| **Configurações** | Cidade, coordenadas e código IBGE (clima e alertas do INMET), chave do Google Maps, cenários de teste da tela de clima. |
+| Aba                       | Para quê                                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Playlists**       | Criar playlists e adicionar sites, imagens, vídeos, clima, trânsito e mensagens. Arrastar para reordenar, ativar/desativar, pré-visualizar. |
+| **Programação**   | Timeline de 00:00 a 23:59. Arraste playlists e itens da biblioteca, mova, redimensione pelas bordas ou digite os horários.                    |
+| **Configurações** | Cidade, coordenadas e código IBGE (clima e alertas do INMET), chave do Google Maps, cenários de teste da tela de clima.                      |
 
 ### Como a TV decide o que exibir
 

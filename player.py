@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.6.4
+Alava Vision — Player (player.py) · versão 0.8.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -14,6 +14,13 @@ COMO RODAR (com o servidor já rodando; porta = PORT do .env, padrão 8080)
     Fechar: Ctrl+C no terminal (ou Alt+F4 com o foco na TV).
 
     Servidor + player juntos: iniciar_alava_vision.bat
+
+COMO O PLAYER FICA SABENDO DAS MUDANÇAS (0.8.0)
+    • Mantém uma conexão WebSocket aberta em ws://127.0.0.1:PORT/ws/player. O servidor manda o
+      estado na hora em que alguém salva no painel ou a programação troca de bloco.
+    • Se a conexão cair (servidor reiniciando, servidor antigo sem WebSocket), volta a consultar
+      GET /api/player/state a cada 5 s e tenta reconectar sozinho (1 s, 2 s, 4 s… até 30 s).
+    • No terminal: "Aviso instantâneo ligado" / "Aviso instantâneo caiu".
 
 COMPORTAMENTO DO MONITOR
     • Ao abrir, o Chrome é posicionado no monitor escolhido e entra em tela cheia (kiosk).
@@ -34,7 +41,8 @@ MAPA DO CÓDIGO
     Caminhos dos navegadores ........ BROWSER_PATHS
     Abrir Chrome com porta CDP ...... find_browser(), launch_browser(), cdp_up()
     Monitor da TV ................... target_monitor(), browser_pid(), MonitorGuard  (+ monitors.py)
-    Consulta ao servidor ............ fetch_state()  → GET /api/player/state
+    Consulta ao servidor ............ fetch_state()  → GET /api/player/state (reserva quando o WebSocket cai)
+    Aviso instantâneo (WebSocket) ... PushChannel  → ws://127.0.0.1:PORT/ws/player (thread "push")
     Janela de horário de mensagens .. time_in_window()
     URL de cada tipo de item ........ item_url()
     Loop de exibição ................ run()
@@ -44,6 +52,7 @@ import argparse
 import json
 import os
 import subprocess
+import threading
 import time
 import urllib.request
 from datetime import datetime
@@ -53,7 +62,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.6.4"
+__version__ = "0.8.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -85,6 +94,61 @@ def log(*a):
 def fetch_state(server: str) -> dict:
     with urllib.request.urlopen(f"{server}/api/player/state", timeout=5) as r:
         return json.load(r)
+
+
+def signature(state: dict) -> tuple:
+    """O que importa para saber se a TV precisa trocar de conteúdo."""
+    return state.get("version"), state.get("slot")
+
+
+class PushChannel:
+    """Conexão WebSocket com o servidor, numa thread própria.
+
+    O Playwright só pode ser usado pela thread principal, então esta thread não mexe na tela:
+    ela guarda o último estado recebido em `latest` e acende `changed`. O loop de exibição
+    confere esses dois a cada segundo.
+    """
+
+    def __init__(self, port: int):
+        self.url = f"ws://127.0.0.1:{port}/ws/player"
+        self.latest: dict | None = None
+        self.connected = False
+        self.changed = threading.Event()
+        threading.Thread(target=self._loop, name="push", daemon=True).start()
+
+    def current(self) -> dict | None:
+        """Último estado recebido, ou None se a conexão não está ativa (aí use o HTTP)."""
+        latest = self.latest  # lido uma vez só: a thread pode zerá-lo a qualquer momento
+        return latest if self.connected else None
+
+    def wait(self, seconds: float) -> bool:
+        """Espera até `seconds` ou até chegar um aviso. True = chegou aviso."""
+        hit = self.changed.wait(seconds)
+        self.changed.clear()
+        return hit
+
+    def _loop(self) -> None:
+        from websockets.sync.client import connect
+
+        delay, ever_connected, warned = 1, False, False
+        while True:
+            try:
+                with connect(self.url, open_timeout=5) as ws:
+                    self.connected, ever_connected, delay = True, True, 1
+                    log("Aviso instantâneo ligado (WebSocket conectado)")
+                    for msg in ws:
+                        self.latest = json.loads(msg)
+                        self.changed.set()
+            except Exception as e:
+                if not ever_connected and not warned:
+                    log("Aviso instantâneo indisponível (servidor fora do ar ou de versão antiga), "
+                        "consultando a cada 5 s:", str(e).splitlines()[0])
+                    warned = True
+            if self.connected:
+                log("Aviso instantâneo caiu — consultando a cada 5 s até reconectar")
+            self.connected, self.latest = False, None
+            time.sleep(delay)
+            delay = min(delay * 2, 30)
 
 
 def cdp_up(port: int) -> bool:
@@ -213,7 +277,7 @@ class MonitorGuard:
 
 # ─── Loop de exibição ─────────────────────────────────────────────────────────
 
-def run(args):
+def run(args, push: PushChannel):
     from playwright.sync_api import sync_playwright
 
     server = f"http://127.0.0.1:{args.port}"
@@ -235,10 +299,14 @@ def run(args):
             current_url = None
 
             while True:
-                try:
-                    state = fetch_state(server)
-                except Exception as e:
-                    log("Sem API, usando última programação:", e)
+                pushed = push.current()
+                if pushed:
+                    state = pushed               # já veio pelo WebSocket, sem perguntar
+                else:
+                    try:
+                        state = fetch_state(server)
+                    except Exception as e:
+                        log("Sem API, usando última programação:", e)
 
                 items = [x for x in state.get("items", [])
                          if x.get("active") and time_in_window(x.get("config", {}))]
@@ -248,8 +316,10 @@ def run(args):
                     current_url = None
                     idx = 0
                     for _ in range(5):
-                        time.sleep(1)
+                        hit = push.wait(1)       # conteúdo novo no painel aparece na hora
                         guard.check()
+                        if hit:
+                            break
                     continue
 
                 idx %= len(items)
@@ -273,22 +343,25 @@ def run(args):
                         time.sleep(2)
                         continue
 
-                # Durante a exibição, a cada 5 s pergunta ao servidor se algo mudou:
-                # versão (alguém salvou no painel) ou slot (a grade mudou de bloco).
-                signature = (state.get("version"), state.get("slot"))
+                # Durante a exibição, confere se algo mudou: versão (alguém salvou no painel)
+                # ou slot (a grade mudou de bloco). Com o WebSocket ligado, o aviso chega na
+                # hora; sem ele, pergunta ao servidor a cada 5 s.
+                shown = signature(state)
                 deadline = time.time() + duration
                 last_check = time.time()
                 while time.time() < deadline:
-                    time.sleep(1)
+                    push.wait(1)
                     guard.check()
-                    if time.time() - last_check < 5:
-                        continue
-                    last_check = time.time()
-                    try:
-                        fresh = fetch_state(server)
-                    except Exception:
-                        continue
-                    if (fresh.get("version"), fresh.get("slot")) != signature:
+                    fresh = push.current()
+                    if not fresh:
+                        if time.time() - last_check < 5:
+                            continue
+                        last_check = time.time()
+                        try:
+                            fresh = fetch_state(server)
+                        except Exception:
+                            continue
+                    if signature(fresh) != shown:
                         log("Programação mudou — trocando conteúdo")
                         idx = 0
                         current_url = None
@@ -328,9 +401,10 @@ def main():
         log(f"Alava Vision Player {__version__} — alvo:",
             monitors.describe(mon) if mon else f"monitor {args.monitor} (não conectado agora)")
 
+    push = PushChannel(args.port)  # uma só conexão, mesmo se o player reiniciar
     while True:
         try:
-            run(args)
+            run(args, push)
         except KeyboardInterrupt:
             log("Player encerrado.")
             break

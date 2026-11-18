@@ -7,6 +7,17 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.8.0] — 2026-11-18
+#### Adicionado
+- **Aviso instantâneo para o player (WebSocket).** O player mantém uma conexão aberta em `/ws/player` e o servidor manda o estado novo assim que alguém salva algo no painel ou a programação troca de bloco. Antes o player perguntava a cada 5 s, e uma mudança no painel demorava até 5 s para chegar à TV; agora chega em menos de 0,1 s.
+- O servidor confere a programação a cada virada de minuto e avisa os players quando entra outro bloco, sem depender de alguém salvar.
+- No terminal do servidor: `[push] player conectado/desconectado` com o número de players conectados; no do player: "Aviso instantâneo ligado/caiu".
+- `websockets` em `requirements.txt` (já vinha junto com `uvicorn[standard]`; agora está explícito porque o player usa).
+
+#### Alterado
+- Se a conexão cair (servidor reiniciando ou de versão antiga), o player volta a consultar `GET /api/player/state` a cada 5 s e reconecta sozinho (espera 1 s, 2 s, 4 s… até 30 s entre tentativas). A rota HTTP continua igual.
+- `server.py` e `player.py` passam para a versão 0.8.0.
+
 ### [0.7.0] — 2026-11-18
 #### Adicionado
 - **`instalar.bat`**: instalação no computador da TV com dois cliques. Confere Python (3.10+), Git e Chrome, instala as bibliotecas, cria o `.env` perguntando senha, porta e monitor da TV e oferece iniciar com o Windows. Pode ser rodado de novo sem perder o `.env` nem os dados.
@@ -126,7 +137,6 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 > com login (no lugar do app desktop Qt), player Chrome via CDP e conteúdo de vídeo.
 
 ### Planejado
-- **WebSocket**: o servidor avisa o player na hora em que algo muda, em vez de o player consultar a cada 5s (`player.py`)
 - **Vários players na rede**: cadastro de cada TV no painel, com playlist e programação próprias
 - **Usuários e permissões**: hoje existe uma senha única para o painel
 - **Widget de HTML local**: exibir páginas HTML salvas no projeto

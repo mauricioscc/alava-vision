@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.6.4
+Alava Vision — Servidor (server.py) · versão 0.8.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -9,6 +9,9 @@ COMO RODAR
         http://localhost:8080/api/player/state  → o que o player deve exibir AGORA (resultado da grade)
         http://localhost:8080/api/schedule      → blocos salvos na timeline
         http://localhost:8080/api/weather       → dados de clima usados na tela de previsão
+    Aviso instantâneo (WebSocket) para o player:
+        ws://localhost:8080/ws/player  → manda o estado ao conectar e de novo a cada mudança.
+        No terminal do servidor aparecem "[push] player conectado/desconectado".
 
 COMO REVERTER
     Com Git (a partir da 0.3.0):  git log --oneline  e  git checkout <commit> -- server.py
@@ -28,7 +31,9 @@ MAPA DO CÓDIGO
     Itens ........................... GET /api/playlist, POST /api/items,
                                       PUT /api/items/reorder, PUT/DELETE /api/items/{id}
     Grade horária (timeline) ........ GET/PUT /api/schedule, _clean_block()
-    O que está no ar agora .......... resolve_now(), _pick_block(), GET /api/player/state
+    O que está no ar agora .......... resolve_now(), _pick_block(), current_state(), GET /api/player/state
+    Aviso instantâneo (WebSocket) ... WS /ws/player, _players, _broadcast(), _push_watcher(),
+                                      _notify_players() (middleware: avisa após salvar no painel)
     Upload e arquivos ............... POST /api/upload, /uploads/* e /assets/* (StaticFiles)
     Configurações ................... load_settings(), GET/PUT /api/settings
     Clima ........................... _fetch_forecast(), _build_weather(), _inmet_alerts(), get_weather(),
@@ -42,6 +47,7 @@ MAPA DO CÓDIGO
                                       Só clima e trânsito exibem o logo; sites, imagens, vídeos e
                                       mensagens aparecem sem ele.
 """
+import asyncio
 import html
 import json
 import os
@@ -57,13 +63,13 @@ from pathlib import Path
 
 import aiofiles
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.6.4"
+__version__ = "0.8.0"
 
 load_dotenv()
 
@@ -403,14 +409,103 @@ def resolve_now(con: sqlite3.Connection, now: datetime | None = None) -> dict:
                        "until": _hhmm(min(upcoming)) if upcoming else None}}
 
 
-@app.get("/api/player/state")
-def player_state():
+def current_state() -> dict:
+    """O que a TV deve exibir agora + número de versão (usado pela rota HTTP e pelo WebSocket)."""
     with db() as con:
         state = resolve_now(con)
         ver = con.execute("SELECT val FROM version WHERE id=1").fetchone()
     state["version"] = ver["val"] if ver else 0
     state["server_time"] = datetime.now().strftime("%H:%M")
     return state
+
+
+@app.get("/api/player/state")
+def player_state():
+    return current_state()
+
+
+# ─── Aviso instantâneo para os players (WebSocket) ────────────────────────────
+#
+# Antes, o player perguntava a cada 5 s "mudou alguma coisa?". Agora ele mantém uma
+# conexão aberta em /ws/player e o servidor manda o estado novo assim que:
+#   • alguém salva algo no painel (o middleware _notify_players acorda o vigia), ou
+#   • a programação troca de bloco (o vigia confere a cada virada de minuto).
+# "Mudou" = mudou a assinatura (version, slot), o mesmo critério que o player já usava.
+# Se a conexão cair, o player volta a perguntar a cada 5 s pela rota HTTP até reconectar.
+
+_players: dict[WebSocket, asyncio.Lock] = {}   # conexões abertas → trava de envio de cada uma
+_state_changed: asyncio.Event | None = None    # criado no startup, dentro do loop do servidor
+_push_task: asyncio.Task | None = None
+
+
+def _signature(state: dict) -> tuple:
+    return state.get("version"), state.get("slot")
+
+
+async def _send(ws: WebSocket, text: str) -> None:
+    # A trava evita dois envios ao mesmo tempo na mesma conexão (boas-vindas + aviso).
+    async with _players[ws]:
+        await ws.send_text(text)
+
+
+async def _broadcast(state: dict) -> None:
+    text = json.dumps(state, ensure_ascii=False)
+    for ws in list(_players):
+        try:
+            await _send(ws, text)
+        except Exception:
+            _players.pop(ws, None)
+
+
+async def _push_watcher() -> None:
+    """Vigia: recalcula o estado quando o painel salva ou o minuto vira, e avisa se mudou."""
+    last = None
+    while True:
+        _state_changed.clear()
+        try:
+            state = await asyncio.to_thread(current_state)
+            sig = _signature(state)
+            if last is not None and sig != last and _players:
+                print(f"[push] programação mudou — avisando {len(_players)} player(s)")
+                await _broadcast(state)
+            last = sig
+        except Exception as e:
+            print(f"[push] falha ao conferir a programação: {e}")
+        # A grade trabalha em minutos cheios: dorme até logo depois da próxima virada de minuto,
+        # ou até o painel salvar alguma coisa (o que vier primeiro).
+        now = datetime.now()
+        wait = 60 - now.second - now.microsecond / 1e6 + 0.5
+        try:
+            await asyncio.wait_for(_state_changed.wait(), timeout=wait)
+        except asyncio.TimeoutError:
+            pass
+
+
+@app.middleware("http")
+async def _notify_players(request: Request, call_next):
+    """Depois que uma alteração no painel termina (já gravada no banco), acorda o vigia."""
+    response = await call_next(request)
+    if (request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/")
+            and response.status_code < 400 and _state_changed is not None):
+        _state_changed.set()
+    return response
+
+
+@app.websocket("/ws/player")
+async def ws_player(ws: WebSocket):
+    await ws.accept()
+    _players[ws] = asyncio.Lock()
+    who = ws.client.host if ws.client else "?"
+    print(f"[push] player conectado ({who}) — {len(_players)} conectado(s)")
+    try:
+        await _send(ws, json.dumps(await asyncio.to_thread(current_state), ensure_ascii=False))
+        while True:
+            await ws.receive_text()  # o player não envia nada; isso só percebe a desconexão
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _players.pop(ws, None)
+        print(f"[push] player desconectado ({who}) — {len(_players)} conectado(s)")
 
 
 # ─── Upload e arquivos estáticos ──────────────────────────────────────────────
@@ -765,6 +860,14 @@ def startup():
     threading.Thread(target=_weather_refresher, name="clima", daemon=True).start()
     print(f"\n✅ Alava Vision {__version__} rodando em http://0.0.0.0:{PORT}/")
     print(f"   Login: {ADMIN_USER} / {ADMIN_PASSWORD}\n")
+
+
+@app.on_event("startup")
+async def start_push_watcher():
+    global _state_changed, _push_task
+    _state_changed = asyncio.Event()
+    # Guardar a referência: uma tarefa sem referência pode ser recolhida pelo Python.
+    _push_task = asyncio.create_task(_push_watcher(), name="push")
 
 
 if __name__ == "__main__":
