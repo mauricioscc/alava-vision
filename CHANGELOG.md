@@ -22,10 +22,22 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 - **Ordem de decisão da TV:** 1) exceção da data; 2) régua do dia da semana; 3) *Todos os dias*. Dentro da régua escolhida valem as regras de antes: item avulso > playlist > **Playlist padrão** nos horários vazios. A régua é escolhida inteira. Uma régua própria vazia também vale e deixa o dia todo na Playlist padrão, o que serve, por exemplo, para um feriado.
 - O topo do painel ("No ar") mostra a régua de hoje quando ela não é *Todos os dias*. `/api/player/state` ganhou o campo `ruler`.
 - Cada playlist tem uma cor própria na biblioteca, na timeline e no calendário.
+- **📣 Avisos por data** (painel do dia no Calendário → *Adicionar aviso para este dia*): o formulário de item abre só com os tipos que fazem sentido.
+  - **Mensagem:** já vem com título e texto da data ("Hoje é Dia do Professor" + o texto da lista) e um degradê na cor do tipo de data.
+  - **Imagem:** a busca na web abre sozinha, pesquisando pelo nome da data.
+  - **Contador:** contagem regressiva até o dia, começando 7 dias antes por padrão.
+  - **Hoje é dia:** só em dia com feriado ou data comemorativa.
+  - Escolha o assunto (feriado, data da lista ou outro), **quantos dias antes** começa a aparecer, **o dia todo ou só no horário de serviço** e **repetir todo ano**.
+  - O aviso anual acompanha a data móvel: Carnaval, Páscoa e Corpus Christi pela BrasilAPI, Dia das Mães pela lista. Num feriado de dois dias, ele segue o mesmo dia (o 1º ou o 2º). 29/02 cai em 28/02 nos outros anos.
+  - Na TV, o aviso é **intercalado**: entra no fim da rotação do que estiver no ar, sem mexer na programação. Isso vale também durante um item avulso agendado, que passa a alternar com os avisos do dia. Sem isso, uma programação feita só de itens avulsos nunca mostraria os avisos.
+  - No calendário, o dia ganha o selo 📣 N, e o painel do dia lista os avisos ("faltam 5 dias") com editar e excluir.
+  - Os avisos ficam na playlist reservada `avisos` ("Avisos por data"), com `config.notice = {date, days_before, yearly, anchor, hours, title}`. Essa playlist não aparece nas listas do painel e não pode ser excluída.
+- O calendário mostra as **datas comemorativas da lista curada** de cada dia (📅). Quando a data da lista é o próprio feriado (ex.: Natal), ela não se repete: o texto dela aparece junto do feriado.
 - **Logo da Alava no widget de notícias:** no cabeçalho, à esquerda do título, separada por um traço fino na cor de destaque. Usa o `assets/watermark.png` (branco, fundo transparente), que é a versão com melhor contraste no fundo azul-escuro e tem o mesmo tamanho do logo do clima e do trânsito. Pode ser desligada no item (*Mostrar a logo da Alava no cabeçalho*).
 #### Banco de dados
 - `schedule.scope`: régua de cada bloco. Pode ser `all`, `wd:1`…`wd:7` (1 = segunda, como `isoweekday()`) ou `date:AAAA-MM-DD`. Os blocos existentes viram `all` na primeira execução, então a programação atual continua igual.
 - Tabela nova `rulers(scope, created_at)`, com as réguas próprias criadas. É ela que diferencia uma régua própria vazia de um dia sem régua.
+- `GET /api/notices` (avisos). `/api/calendar` ganhou `dates`, `holiday_text` e `notices` em cada dia, e `/api/player/state` ganhou `notices`, os ids dos avisos intercalados agora.
 - API: `GET/PUT/DELETE /api/schedule?scope=…` (sem `scope` continua sendo *Todos os dias*), `GET /api/schedule/rulers`, `POST /api/schedule/copy` e `GET /api/calendar?month=AAAA-MM`.
 #### Corrigido
 - O rodapé do painel mostrava "v0.6.1".

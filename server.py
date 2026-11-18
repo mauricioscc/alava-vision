@@ -55,7 +55,12 @@ MAPA DO CÓDIGO
       réguas por dia / exceções ..... tabela rulers + coluna schedule.scope; _check_scope(), scope_label(),
                                       ruler_for_day() (PRIORIDADE: exceção > dia da semana > Todos os dias)
       dias úteis / copiar ........... POST /api/schedule/copy, GET /api/schedule/rulers
-      calendário (panorama do mês) .. GET /api/calendar?month=AAAA-MM (régua, blocos e feriado de cada dia)
+      calendário (panorama do mês) .. GET /api/calendar?month=AAAA-MM (régua, blocos, feriado, datas da lista
+                                      e avisos de cada dia)
+    Avisos por data ................. playlist reservada NOTICE_PLAYLIST ('avisos'), config.notice; notice_date()
+                                      (repete todo ano seguindo feriado/data móvel), notice_occurrence(),
+                                      notices_now() → intercalados no fim da playlist em resolve_now();
+                                      GET /api/notices; contador anual em view_countdown()
     O que está no ar agora .......... resolve_now() (escolhe a régua do dia), _pick_block(), current_state(),
                                       GET /api/player/state (campo "ruler" = régua em uso hoje)
     Aviso instantâneo (WebSocket) ... WS /ws/player, _players, _broadcast(), _push_watcher(),
@@ -203,6 +208,9 @@ def init_db():
             )""")
         con.execute("INSERT OR IGNORE INTO playlists VALUES (?,?,?)",
                     (DEFAULT_PLAYLIST, "Playlist padrão", int(time.time())))
+        # 0.11.0: playlist reservada dos avisos por data (fica fora das listas do painel)
+        con.execute("INSERT OR IGNORE INTO playlists VALUES (?,?,?)",
+                    ("avisos", "Avisos por data", int(time.time())))
         # Grade horária: cada bloco aponta para uma playlist (trilha base)
         # ou para um item avulso (trilha de sobreposição). Minutos do dia: 0–1440.
         con.execute("""
@@ -267,7 +275,8 @@ def list_playlists():
             SELECT p.id, p.name, COUNT(i.id) AS item_count,
                    COALESCE(SUM(CASE WHEN i.active = 1 THEN i.duration END), 0) AS total_duration
             FROM playlists p LEFT JOIN items i ON i.playlist_id = p.id
-            GROUP BY p.id ORDER BY (p.id != ?), p.created_at""", (DEFAULT_PLAYLIST,)).fetchall()
+            WHERE p.id != ?
+            GROUP BY p.id ORDER BY (p.id != ?), p.created_at""", (NOTICE_PLAYLIST, DEFAULT_PLAYLIST)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -298,6 +307,8 @@ async def rename_playlist(pid: str, request: Request):
 def delete_playlist(pid: str):
     if pid == DEFAULT_PLAYLIST:
         raise HTTPException(400, "A playlist padrão não pode ser excluída")
+    if pid == NOTICE_PLAYLIST:
+        raise HTTPException(400, "A playlist dos avisos por data é do sistema")
     with db() as con:
         item_ids = [r["id"] for r in con.execute("SELECT id FROM items WHERE playlist_id=?", (pid,))]
         for iid in item_ids:
@@ -596,8 +607,11 @@ def calendar_month(month: str | None = None):
         hol = {h["date"]: h["name"] for h in holidays(first.year)}
     except Exception:
         pass
+    entries, _ = parse_curio(curio_text())
     with db() as con:
         custom = _custom_scopes(con)
+        notices = [item_dict(r) for r in con.execute(
+            "SELECT * FROM items WHERE playlist_id=? ORDER BY created_at", (NOTICE_PLAYLIST,))]
         pl_names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM playlists")}
         it_names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM items")}
         cache: dict[str, dict] = {}
@@ -620,10 +634,26 @@ def calendar_month(month: str | None = None):
             days.append({"date": d.isoformat(), "weekday": d.isoweekday(), "scope": sc,
                          "level": "date" if sc.startswith("date:") else "weekday" if sc.startswith("wd:") else "all",
                          "label": scope_label(sc), "holiday": hol.get(d.isoformat()),
-                         "has_weekday_ruler": f"wd:{d.isoweekday()}" in custom, **summary(sc)})
+                         "has_weekday_ruler": f"wd:{d.isoweekday()}" in custom,
+                         # datas comemorativas da lista curada e avisos por data que aparecem no dia
+                         **_day_dates(entries, d, hol.get(d.isoformat())),
+                         "notices": [{"id": n["id"], "name": n["name"], "type": n["type"], "active": n["active"],
+                                      "event": (occ := notice_occurrence(n["config"], d)).isoformat(),
+                                      "days_left": (occ - d).days}
+                                     for n in notices if notice_occurrence(n["config"], d)],
+                         **summary(sc)})
             d += _timedelta(days=1)
     return {"month": first.strftime("%Y-%m"), "today": _date.today().isoformat(),
             "default_name": pl_names.get(DEFAULT_PLAYLIST, "Playlist padrão"), "days": days}
+
+
+def _day_dates(entries: list[dict], d: _date, holiday: str | None) -> dict:
+    """Datas da lista curada no dia. A que for o próprio feriado (mesmo nome, ex.: "Natal")
+    não se repete: o texto dela vira o texto do feriado (holiday_text)."""
+    on = [e for e in entries if _curio_matches(e["rule"], d)]
+    same = [e for e in on if holiday and _stems(e["title"]) & _stems(holiday)]
+    return {"dates": [{"title": e["title"], "text": e["text"]} for e in on if e not in same],
+            "holiday_text": same[0]["text"] if same else None}
 
 
 def _pick_block(blocks: list[dict], kind: str, now_min: int) -> dict | None:
@@ -647,21 +677,26 @@ def resolve_now(con: sqlite3.Connection, now: datetime | None = None) -> dict:
     names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM playlists")}
     ruler = {"scope": scope, "label": scope_label(scope)}
 
+    notices = notices_now(con, now)
+
     def items_of(pid: str) -> list[dict]:
         rows = con.execute("SELECT * FROM items WHERE playlist_id=? AND active=1 ORDER BY ord, created_at", (pid,))
-        return [item_dict(r) for r in rows]
+        # Avisos por data do dia entram no fim da rotação (aparecem uma vez por volta da playlist)
+        return [item_dict(r) for r in rows] + notices
 
     overlay = _pick_block(blocks, "item", m)
     if overlay:
         row = con.execute("SELECT * FROM items WHERE id=? AND active=1", (overlay["ref_id"],)).fetchone()
         if row:
-            return {"slot": f"item:{overlay['id']}", "items": [item_dict(row)], "ruler": ruler,
+            # Avisos por data também entram durante o item avulso: muita programação é feita só de
+            # itens avulsos (ex.: Clima 10h–14h), e sem isso o aviso não apareceria no expediente.
+            return {"slot": f"item:{overlay['id']}", "items": [item_dict(row)] + notices, "ruler": ruler,
                     "source": {"kind": "item", "name": row["name"], "until": _hhmm(overlay["end_min"])}}
 
     base = _pick_block(blocks, "playlist", m)
     if base:
         its = items_of(base["ref_id"])
-        if its:
+        if len(its) > len(notices):   # playlist só com avisos = playlist vazia → cai na padrão
             return {"slot": f"playlist:{base['id']}", "items": its, "ruler": ruler,
                     "source": {"kind": "playlist", "name": names.get(base["ref_id"], "Playlist"),
                                "until": _hhmm(base["end_min"])}}
@@ -679,6 +714,9 @@ def current_state() -> dict:
         ver = con.execute("SELECT val FROM version WHERE id=1").fetchone()
     state["version"] = ver["val"] if ver else 0
     state["server_time"] = datetime.now().strftime("%H:%M")
+    # Avisos por data intercalados agora: entram na assinatura do WebSocket para o player
+    # receber a lista nova quando um aviso começa ou termina (ex.: início do horário de serviço)
+    state["notices"] = [i["id"] for i in state["items"] if i.get("playlist_id") == NOTICE_PLAYLIST]
     # Curiosidades: quantos cartões há hoje (o player pula o item "today" se for 0) e as
     # regras das curiosidades automáticas, que o player intercala na playlist.
     try:
@@ -711,7 +749,8 @@ _push_task: asyncio.Task | None = None
 def _signature(state: dict) -> tuple:
     # "today" entra para o player saber na virada do dia (outras curiosidades) e quando as
     # curiosidades automáticas mudam em Configurações (que não alteram a versão).
-    return state.get("version"), state.get("slot"), json.dumps(state.get("today"), sort_keys=True)
+    return (state.get("version"), state.get("slot"), json.dumps(state.get("today"), sort_keys=True),
+            tuple(state.get("notices") or ()))
 
 
 async def _send(ws: WebSocket, text: str) -> None:
@@ -1245,6 +1284,107 @@ def today_auto_settings() -> dict:
             "duration": _num(s.get("today_duration"), 15, 5, 120)}
 
 
+# ─── Avisos por data (0.11.0) ─────────────────────────────────────────────────
+#
+# Um aviso é um item comum (mensagem, imagem, contador ou "Hoje é dia") guardado na playlist
+# reservada NOTICE_PLAYLIST ("Avisos por data", que não aparece nas listas do painel), com
+#   config.notice = {"date": "AAAA-MM-DD",   dia do evento
+#                    "days_before": 0,       começa a aparecer N dias antes (contagem regressiva)
+#                    "yearly": false,        repete todo ano
+#                    "anchor": {"holiday": "Carnaval"} | {"curio": "Dia das Mães"} | {},
+#                    "hours": "all" | "work"}   o dia todo ou só no horário de serviço
+#
+# Na TV, o aviso é INTERCALADO: entra no fim da rotação do que estiver no ar (resolve_now),
+# sem mexer na programação do dia. Vale também durante um item avulso agendado: ele passa a
+# alternar com os avisos do dia (ex.: Clima, Aviso, Clima, Aviso...).
+# Repetir todo ano: com "anchor", a data acompanha o feriado ou a data móvel da lista
+# (Carnaval, Páscoa, Dia das Mães...); sem ela, repete o mesmo DD/MM.
+
+NOTICE_PLAYLIST = "avisos"
+NOTICE_TYPES = {"message", "image", "countdown", "today"}
+
+
+def _curio_day(title: str, year: int) -> _date | None:
+    """Dia do ano `year` em que cai a data da lista curada com esse título (datas móveis)."""
+    entries, _ = parse_curio(curio_text())
+    rules = [e["rule"] for e in entries if e["title"].lower() == title.lower()]
+    if not rules:
+        return None
+    d = _date(year, 1, 1)
+    while d.year == year:
+        if any(_curio_matches(r, d) for r in rules):
+            return d
+        d += _timedelta(days=1)
+    return None
+
+
+def notice_date(n: dict, year: int) -> _date | None:
+    """Dia do evento do aviso no ano `year` (None se o aviso não acontece nesse ano)."""
+    try:
+        base = _date.fromisoformat(str(n.get("date", "")))
+    except ValueError:
+        return None
+    if not n.get("yearly"):
+        return base if base.year == year else None
+    a = n.get("anchor") or {}
+    if a.get("holiday"):
+        # Feriado de vários dias com o mesmo nome (Carnaval segunda e terça): segue o mesmo dia
+        # (o 1º ou o 2º) em que o aviso foi criado.
+        same = lambda y: sorted(h["date"] for h in holidays(y) if h["name"] == a["holiday"])
+        orig, hits = same(base.year), same(year)
+        if hits:
+            k = orig.index(base.isoformat()) if base.isoformat() in orig else 0
+            return _date.fromisoformat(hits[min(k, len(hits) - 1)])
+    if a.get("curio"):
+        hit = _curio_day(a["curio"], year)
+        if hit:
+            return hit
+    try:
+        return base.replace(year=year)
+    except ValueError:            # 29/02 em ano que não é bissexto
+        return base.replace(year=year, day=28)
+
+
+def notice_occurrence(cfg: dict, day: _date) -> _date | None:
+    """Se o aviso deve aparecer no dia `day`, devolve o dia do evento correspondente."""
+    n = cfg.get("notice") or {}
+    before = _num(n.get("days_before"), 0, 0, 60)
+    for y in (day.year, day.year + 1):      # +1: contagem de 28/12 para um evento em janeiro
+        d = notice_date(n, y)
+        if d and d - _timedelta(days=before) <= day <= d:
+            return d
+    return None
+
+
+def notices_now(con: sqlite3.Connection, now: datetime) -> list[dict]:
+    """Avisos que a TV intercala agora (dia certo e, se for o caso, horário de serviço)."""
+    rows = con.execute("SELECT * FROM items WHERE playlist_id=? AND active=1 ORDER BY ord, created_at",
+                       (NOTICE_PLAYLIST,)).fetchall()
+    if not rows:
+        return []
+    hhmm, work = now.strftime("%H:%M"), None
+    out = []
+    for r in rows:
+        it = item_dict(r)
+        if not notice_occurrence(it["config"], now.date()):
+            continue
+        if (it["config"].get("notice") or {}).get("hours") == "work":
+            work = work or today_auto_settings()
+            if not work["start"] <= hhmm < work["end"]:
+                continue
+        out.append(it)
+    return out
+
+
+@app.get("/api/notices")
+def list_notices():
+    """Todos os avisos cadastrados (o calendário mostra os de cada dia em /api/calendar)."""
+    with db() as con:
+        rows = [item_dict(r) for r in con.execute(
+            "SELECT * FROM items WHERE playlist_id=? ORDER BY created_at", (NOTICE_PLAYLIST,))]
+    return {"notices": rows}
+
+
 @app.get("/api/today")
 def api_today(d: str | None = None):
     from datetime import date
@@ -1740,6 +1880,9 @@ def view_countdown(item_id: str):
     Com config.hide_after, o player deixa de exibir o item depois do fim (countdown_visible()).
     """
     cfg = _item_config(item_id)
+    # Aviso por data que repete todo ano: o contador aponta para o evento deste ano
+    if cfg.get("notice") and (occ := notice_occurrence(cfg, _date.today())):
+        cfg["target"] = occ.isoformat() + (str(cfg.get("target", ""))[10:] or "T00:00")
     title = html.escape(cfg.get("title", ""))
     end_text = html.escape(cfg.get("end_text", "") or "Chegou a hora!")
     bg = html.escape(cfg.get("bg_color", "#0a0a1a"))

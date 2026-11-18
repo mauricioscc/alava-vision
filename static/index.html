@@ -52,6 +52,9 @@
     Aba Calendário ................. #tab-calendar, CAL, loadCalendar() → GET /api/calendar, renderCalendar() (.cal-day,
                                      .lvl-all/.lvl-weekday/.lvl-date), renderCalDay() (#cal-day), calCreateException(),
                                      calRemoveException(), calAllDay(), goSchedule()
+      avisos por data .............. #notice-box (#f-nt-*), NOTICE, openNoticeModal(), noticePreset(), getNotice(),
+                                     setNoticeFromItem(), deleteNotice(), .cal-notices; salvos na playlist 'avisos'
+                                     com config.notice (saveItem); itemById() acha itens de qualquer playlist
     Configurações .................. #tab-settings, loadSettings(), saveSettings()
       curiosidades e datas ......... #card-today (#s-today-*, #s-curio), saveCuriosities(), resetCuriosities()
       voz (instalar) ............... #card-voice, showVoiceStatus(), installVoice() → POST /api/tts-install
@@ -411,6 +414,25 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 @media(max-width:1100px){.cal-layout{grid-template-columns:1fr}#cal-day{position:static}}
 @media(max-width:700px){.cal-day,.cal-blank{min-height:60px;padding:5px}.cd-pls,.cd-hol,.cd-lvl{display:none}}
 
+/* ── Avisos por data (0.11.0) ─────────────────────────────────────────────── */
+.notice-box{display:flex;flex-direction:column;gap:12px;padding:14px;border-radius:10px;
+  border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);background:color-mix(in srgb,var(--warn) 7%,transparent)}
+.notice-box .nb-title{font-size:13px;font-weight:600}
+.cd-date{font-size:11px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cd-nt{font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:4px;white-space:nowrap;
+  background:color-mix(in srgb,var(--warn) 18%,transparent);border:1px solid color-mix(in srgb,var(--warn) 55%,transparent)}
+.cal-dates{font-size:13px;color:var(--accent);margin-bottom:6px;line-height:1.5}
+.cal-dates span{display:block;color:var(--soft);font-size:12px}
+.cal-notices{margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px}
+.cal-sub{font-size:13px;font-weight:600}
+.cal-notices ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+.cal-notices li{display:flex;align-items:center;gap:8px;font-size:13px;padding:7px 9px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.cal-notices li .nm{flex:1;min-width:0}
+.cal-notices li .nm b{display:block;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-notices li .x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;padding:2px 5px;border-radius:4px}
+.cal-notices li .x:hover{color:var(--text);background:var(--card)}
+.cal-notices .btn{justify-content:center}
+
 /* Status */
 #status{position:fixed;bottom:20px;right:20px;padding:10px 16px;border-radius:8px;max-width:calc(100vw - 40px);
   font-size:13px;font-weight:500;pointer-events:none;z-index:200}
@@ -673,6 +695,27 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <button class="type-tab" data-type="news" onclick="setType('news')">📰 Notícias</button>
           <button class="type-tab" data-type="today" onclick="setType('today')">📅 Hoje é dia</button>
         </div>
+      </div>
+
+      <!-- Aviso por data (0.11.0): só aparece quando o modal foi aberto pelo Calendário -->
+      <div id="notice-box" class="notice-box" hidden>
+        <div class="nb-title">📣 Quando o aviso aparece</div>
+        <div class="form-group"><label for="f-nt-about">Sobre</label>
+          <select id="f-nt-about" onchange="noticePreset()"></select></div>
+        <div class="row2">
+          <div class="form-group"><label for="f-nt-before">Começar a mostrar</label>
+            <select id="f-nt-before" onchange="updateNoticeSummary()">
+              <option value="0">Só no dia</option><option value="1">1 dia antes</option><option value="2">2 dias antes</option>
+              <option value="3">3 dias antes</option><option value="5">5 dias antes</option><option value="7">7 dias antes</option>
+              <option value="10">10 dias antes</option><option value="15">15 dias antes</option><option value="30">30 dias antes</option>
+            </select></div>
+          <div class="form-group"><label for="f-nt-hours">Horário</label>
+            <select id="f-nt-hours" onchange="updateNoticeSummary()">
+              <option value="all">O dia todo</option><option value="work">Só no horário de serviço</option>
+            </select></div>
+        </div>
+        <label class="check-line"><input type="checkbox" id="f-nt-yearly" onchange="updateNoticeSummary()"> Repetir todo ano</label>
+        <p class="hint" id="nt-summary"></p>
       </div>
 
       <div class="form-group"><label for="f-name">Nome</label><input type="text" id="f-name" placeholder="Nome para identificação"></div>
@@ -1229,6 +1272,7 @@ $('vid-preview').addEventListener('loadedmetadata', updateVideoHint);
 function openAddModal() {
   editId = null; pendingFile = null;
   resetItemForm();
+  setNoticeMode(false);
   $('modal-title').textContent = 'Adicionar item';
   $('modal-sub').textContent = 'Na playlist: ' + (playlists.find(p => p.id === currentPl)?.name || 'Playlist padrão');
   $('type-selector').hidden = false;
@@ -1237,13 +1281,14 @@ function openAddModal() {
 }
 
 function openEdit(id) {
-  const item = items.find(i => i.id === id);
+  const item = itemById(id);   // da playlist aberta ou de qualquer outra (ex.: avisos, pelo Calendário)
   if (!item) return;
   editId = id; pendingFile = null;
   resetItemForm();
   $('modal-title').textContent = 'Editar item';
   $('modal-sub').textContent = TYPE_NAMES[item.type];
   $('type-selector').hidden = true;
+  setNoticeMode(false);
   currentType = item.type;
   showCfgPanel(item.type);
   $('f-name').value = item.name;
@@ -1267,6 +1312,7 @@ function openEdit(id) {
   }
   if (item.type === 'message') setMsgForm(c);
   if (item.type === 'news') setNewsForm(c);
+  if (c.notice) setNoticeFromItem(item);
   $('modal').hidden = false;
   if (item.type === 'message') msgPreviewSoon();
 }
@@ -1506,6 +1552,7 @@ function setType(t) {
   $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30, news:45, today:15}[t] || 30;
   if (t === 'news') setNewsForm({});
   if (t === 'message') msgPreviewSoon();
+  if (NOTICE) noticePreset(true);   // aviso por data: preenche a partir do feriado/data escolhido
 }
 
 function showCfgPanel(t) {
@@ -1531,7 +1578,7 @@ async function saveItem() {
     config = {url};
   } else if (currentType === 'image' || currentType === 'video' || currentType === 'html') {
     if (pendingFile) config = {url: pendingFile.url, ...(pendingFile.file ? {file: pendingFile.file} : {})};
-    else if (editId) config = {...(items.find(i => i.id === editId)?.config || {})};
+    else if (editId) config = {...(itemById(editId)?.config || {})};
     else { status('Selecione um arquivo', 'err'); return; }
     if (currentType === 'video') config.loop = $('f-vid-loop').checked;
   } else if (currentType === 'news') {
@@ -1549,9 +1596,14 @@ async function saveItem() {
     config = getMsgConfig();
     if (config.bg_mode === 'image' && !config.bg_image) { status('Escolha uma imagem de fundo (busque na web ou envie)', 'err'); return; }
   }
+  if (NOTICE) {   // aviso por data: vai para a playlist reservada, com as regras de quando aparece
+    config.notice = getNotice();
+    if (currentType === 'countdown') config.hide_after = false;
+  }
   try {
-    if (editId) { await api('PUT', `/api/items/${editId}`, {name, duration, config}); status('Item atualizado'); }
-    else { await api('POST', '/api/items', {type: currentType, name, duration, config, playlist_id: currentPl}); status('Item adicionado'); }
+    if (editId) { await api('PUT', `/api/items/${editId}`, {name, duration, config}); status(NOTICE ? 'Aviso atualizado' : 'Item atualizado'); }
+    else { await api('POST', '/api/items', {type: currentType, name, duration, config, playlist_id: NOTICE ? 'avisos' : currentPl});
+           status(NOTICE ? 'Aviso adicionado' : 'Item adicionado'); }
     closeModal();
     await refreshAll();
   } catch(e) { status('Erro ao salvar: ' + e.message, 'err'); }
@@ -2186,8 +2238,9 @@ function renderCalendar() {
         data-d="${d.date}" title="${esc(d.label)}${d.holiday ? ' · ' + esc(d.holiday) : ''}">
       <div class="cd-top"><span class="cd-n">${+d.date.slice(8)}</span>${badge ? `<span class="cd-lvl">${badge}</span>` : ''}</div>
       ${d.holiday ? `<div class="cd-hol">🎉 ${esc(d.holiday)}</div>` : ''}
+      ${d.dates.length ? `<div class="cd-date">📅 ${esc(d.dates[0].title)}${d.dates.length > 1 ? ` +${d.dates.length - 1}` : ''}</div>` : ''}
       <div class="cd-bar">${stripHtml(d.blocks)}</div>
-      <div class="cd-pls">${pls || `<span class="cd-def">${esc(D.default_name)}</span>`}</div>
+      <div class="cd-pls">${d.notices.length ? `<span class="cd-nt" title="${d.notices.length} aviso(s) neste dia">📣 ${d.notices.length}</span>` : ''}${pls || `<span class="cd-def">${esc(D.default_name)}</span>`}</div>
     </button>`;
   }).join('');
   $('cal-grid').innerHTML = h;
@@ -2213,17 +2266,29 @@ function renderCalDay() {
   }).join('');
   $('cal-day').innerHTML = `
     <div class="section-title" style="margin-bottom:4px">${WD_LONG[d.weekday]}, ${fmtDate(d.date)}</div>
-    ${d.holiday ? `<div class="cal-hol">🎉 Feriado nacional: <b>${esc(d.holiday)}</b></div>` : ''}
+    ${d.holiday ? `<div class="cal-hol">🎉 Feriado nacional: <b>${esc(d.holiday)}</b>${d.holiday_text ? `<div class="hint">${esc(d.holiday_text)}</div>` : ''}</div>` : ''}
+    ${d.dates.map(e => `<div class="cal-dates">📅 <b>${esc(e.title)}</b>${e.text ? `<span>${esc(e.text)}</span>` : ''}</div>`).join('')}
     <p class="cal-why">Régua em uso: <b>${esc(d.label)}</b>, porque ${why}</p>
     <div class="cal-strip">${stripHtml(d.blocks)}<i style="left:25%"></i><i style="left:50%"></i><i style="left:75%"></i></div>
     <div class="cal-hours"><span>00h</span><span>06h</span><span>12h</span><span>18h</span><span>24h</span></div>
     ${rows ? `<ul class="cal-blocks">${rows}</ul>` : ''}
     <p class="hint" style="margin-top:6px">${rows ? 'Horários sem bloco' : 'Sem blocos: o dia todo'} ficam na <b>${esc(CAL.data.default_name)}</b>.</p>
+    <div class="cal-notices">
+      <div class="cal-sub">📣 Avisos do dia</div>
+      ${d.notices.length ? `<ul>${d.notices.map(n => `<li><span>${TYPE_ICONS[n.type] || '📣'}</span>
+          <span class="nm"><b title="${esc(n.name)}">${esc(n.name)}</b>
+          <span class="hint">${n.days_left > 0 ? `faltam ${n.days_left} dia${n.days_left > 1 ? 's' : ''} (evento em ${fmtDate(n.event)})` : 'no dia do evento'}${n.active ? '' : ' · desativado'}</span></span>
+          <button class="x" title="Editar" aria-label="Editar aviso" onclick="openEdit('${n.id}')">✎</button>
+          <button class="x" title="Excluir" aria-label="Excluir aviso" onclick="deleteNotice('${n.id}')">✕</button></li>`).join('')}</ul>`
+        : `<p class="hint">Nenhum aviso. Ele entra intercalado na playlist que estiver no ar, sem mudar a programação.</p>`}
+      <button class="btn ${d.holiday || d.dates.length ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="openNoticeModal('${d.date}')">📣 Adicionar aviso para este dia</button>
+    </div>
     <div class="cal-actions">
+      <div class="cal-sub">Programação do dia</div>
       ${d.level === 'date'
-        ? `<button class="btn btn-primary btn-sm" onclick="goSchedule('${exc}')">Editar a exceção</button>
+        ? `<button class="btn btn-ghost btn-sm" onclick="goSchedule('${exc}')">Editar a exceção</button>
            <button class="btn btn-danger btn-sm" onclick="calRemoveException('${d.date}')">Remover exceção</button>`
-        : `<button class="btn btn-primary btn-sm" onclick="calCreateException('${d.date}')">Criar exceção para este dia</button>`}
+        : `<button class="btn btn-ghost btn-sm" onclick="calCreateException('${d.date}')">Criar exceção para este dia</button>`}
       <div class="cal-allday">
         <label for="cal-pl">Exibir uma playlist o dia todo (exceção)</label>
         <div style="display:flex;gap:8px"><select id="cal-pl">${playlists.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>
@@ -2263,6 +2328,127 @@ async function calAllDay(day) {
     status(`${fmtDate(day)}: ${name} o dia todo`);
     await loadCalendar();
   } catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+
+// ═══ AVISOS POR DATA (0.11.0) ═════════════════════════════════════════════════
+// "📣 Adicionar aviso" no painel do dia do Calendário abre o mesmo formulário de item, só com os
+// tipos que fazem sentido (mensagem, imagem, contador, Hoje é dia) e a caixa #notice-box.
+// O aviso é salvo na playlist reservada 'avisos' com config.notice = {date, days_before, yearly,
+// anchor, hours, title}. Na TV ele é intercalado na playlist que estiver no ar (server.py: notices_now).
+let NOTICE = null;   // {date, events: [{kind: 'holiday'|'date', title, text}]} enquanto o modal é de aviso
+const NOTICE_TYPES = ['message', 'image', 'countdown', 'today'];
+const NOTICE_GRAD = {holiday: ['#14532d', '#22c55e'], date: ['#1e3a8a', '#06b6d4'], other: ['#4c1d95', '#ec4899']};
+const itemById = id => items.find(i => i.id === id) || allItems.find(i => i.id === id);
+
+function setNoticeMode(on) {
+  $('notice-box').hidden = !on;
+  document.querySelectorAll('.type-tab').forEach(b => b.hidden = on && (!NOTICE_TYPES.includes(b.dataset.type)
+    || (b.dataset.type === 'today' && !NOTICE?.events.length)));   // "Hoje é dia" só em dia com data/feriado
+  if (!on) NOTICE = null;
+}
+
+function noticeEvent() {
+  const i = $('f-nt-about').value;
+  return i === '' ? null : NOTICE.events[+i];
+}
+
+function fillNoticeAbout(sel) {
+  $('f-nt-about').innerHTML = NOTICE.events.map((e, i) =>
+    `<option value="${i}">${e.kind === 'holiday' ? '🎉' : '📅'} ${esc(e.title)}</option>`).join('')
+    + '<option value="">Outro assunto</option>';
+  $('f-nt-about').value = sel ?? (NOTICE.events.length ? '0' : '');
+}
+
+function openNoticeModal(day) {
+  const d = CAL.data.days.find(x => x.date === day);
+  // O servidor já tira da lista a data que é o próprio feriado e passa o texto dela (holiday_text)
+  const events = [...(d.holiday ? [{kind: 'holiday', title: d.holiday, text: d.holiday_text || ''}] : []),
+                  ...d.dates.map(e => ({kind: 'date', title: e.title, text: e.text}))];
+  NOTICE = {date: day, events};
+  editId = null; pendingFile = null;
+  resetItemForm();
+  $('modal-title').textContent = '📣 Adicionar aviso';
+  $('modal-sub').textContent = `${WD_LONG[d.weekday]}, ${fmtDate(day)} · aparece intercalado na playlist do dia`;
+  $('type-selector').hidden = false;
+  setNoticeMode(true);
+  fillNoticeAbout();
+  $('f-nt-before').value = '0'; $('f-nt-hours').value = 'all';
+  $('f-nt-yearly').checked = events.length > 0;   // feriado e data comemorativa voltam todo ano
+  $('modal').hidden = false;
+  setType('message');
+}
+
+// Preenche o formulário a partir do assunto (feriado / data da lista) e do tipo escolhido.
+function noticePreset(fromTab) {
+  if (!NOTICE || editId) return;
+  const ev = noticeEvent(), title = ev?.title || '';
+  const kind = ev?.kind || 'other';
+  const hoje = t => 'Hoje é ' + t;
+  if (currentType === 'message') {
+    const [g1, g2] = NOTICE_GRAD[kind];
+    $('f-name').value = title || 'Aviso';
+    setMsgForm({...getMsgConfig(), title: title ? hoje(title) : '', bg_mode: 'gradient', bg_color: g1, bg_color2: g2, bg_angle: 135,
+      text: ev ? (ev.text || (kind === 'holiday' ? 'Bom feriado a todos!' : '')) : $('f-msg-text').value});
+    msgPreviewSoon();
+  } else if (currentType === 'image') {
+    $('f-name').value = title || '';
+    // Com o assunto definido, a busca de imagens já abre pesquisando por ele
+    if (fromTab && title && !pendingFile) setTimeout(() => openImagePicker('image'), 150);
+  } else if (currentType === 'countdown') {
+    $('f-name').value = title ? 'Contagem: ' + title : 'Contagem regressiva';
+    $('f-cd-title').value = title ? `Faltam para ${title.replace(/^dia /i, 'o Dia ')}` : 'Faltam';
+    $('f-cd-target').value = NOTICE.date + 'T00:00';
+    $('f-cd-end').value = title ? `${hoje(title)}! 🎉` : 'Chegou o dia! 🎉';
+    $('f-cd-hide').checked = false;
+    if ($('f-nt-before').value === '0') $('f-nt-before').value = '7';
+  } else if (currentType === 'today') {
+    $('f-name').value = title ? 'Hoje é dia: ' + title : 'Hoje é dia';
+    $('f-nt-before').value = '0';
+  }
+  updateNoticeSummary();
+}
+
+function getNotice() {
+  const ev = noticeEvent(), yearly = $('f-nt-yearly').checked;
+  return {
+    date: NOTICE.date, title: ev?.title || '', days_before: parseInt($('f-nt-before').value) || 0, yearly,
+    // Repetir todo ano acompanhando o feriado/data móvel (Carnaval, Dia das Mães...); "Outro assunto" repete o DD/MM
+    anchor: yearly && ev ? (ev.kind === 'holiday' ? {holiday: ev.title} : {curio: ev.title}) : {},
+    hours: $('f-nt-hours').value,
+  };
+}
+
+function updateNoticeSummary() {
+  if (!NOTICE) return;
+  const n = getNotice(), d = new Date(n.date + 'T12:00');
+  const from = new Date(d); from.setDate(d.getDate() - n.days_before);
+  const when = n.days_before ? `de ${fmtDate(isoLocal(from))} a ${fmtDate(n.date)}` : `em ${fmtDate(n.date)}`;
+  const today = currentType === 'today' && n.days_before ? ' A tela "Hoje é dia" só faz sentido no próprio dia.' : '';
+  $('nt-summary').textContent = `Aparece ${when}, ${n.hours === 'work' ? 'no horário de serviço' : 'o dia todo'}, `
+    + `intercalado na playlist que estiver no ar.${n.yearly ? (n.anchor.holiday || n.anchor.curio
+      ? ' Repete todo ano, acompanhando a data de "' + n.title + '".' : ' Repete todo ano no mesmo dia.') : ''}${today}`;
+}
+
+// Abre a edição de um aviso já salvo (o resto do formulário é preenchido por openEdit).
+function setNoticeFromItem(item) {
+  const n = item.config.notice || {};
+  NOTICE = {date: n.date, events: n.title ? [{kind: n.anchor?.holiday ? 'holiday' : 'date', title: n.title, text: ''}] : []};
+  setNoticeMode(true);
+  fillNoticeAbout(n.title ? '0' : '');
+  $('f-nt-before').value = String(n.days_before || 0);
+  if (!$('f-nt-before').value) $('f-nt-before').value = '0';
+  $('f-nt-hours').value = n.hours || 'all';
+  $('f-nt-yearly').checked = !!n.yearly;
+  $('modal-title').textContent = '📣 Editar aviso';
+  $('modal-sub').textContent = `${TYPE_NAMES[item.type]} · evento em ${fmtDate(n.date)}`;
+  updateNoticeSummary();
+}
+
+async function deleteNotice(id) {
+  const it = itemById(id);
+  if (!confirm(`Excluir o aviso "${it?.name || ''}"?`)) return;
+  try { await api('DELETE', '/api/items/' + id); status('Aviso excluído'); await loadCalendar(); }
+  catch(e) { status('Erro: ' + e.message, 'err'); }
 }
 
 // ═══ CONFIGURAÇÕES ════════════════════════════════════════════════════════════
