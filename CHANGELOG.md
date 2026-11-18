@@ -7,6 +7,43 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.10.0] — 2026-11-18
+#### Adicionado
+- **Mensagem com muito mais opções:**
+  - Fundo em **cor sólida**, **degradê** (duas cores, quatro direções e 8 combinações prontas) ou **imagem**, com controle de escurecimento (0–85 %) para o texto continuar legível.
+  - **Título** opcional acima do texto; o texto mantém as quebras de linha digitadas.
+  - **Fonte** (padrão, serifada, destaque, manuscrita, máquina de escrever, todas do Windows e sem depender de internet), **alinhamento**, **negrito**, **sombra** e **animação de entrada** (aparecer suave, aproximar, subir).
+  - **Prévia ao vivo** no formulário, em escala de uma TV 1920×1080, que atualiza enquanto você edita (`/view/message-preview`).
+- **Buscar imagens na web** para o fundo da mensagem e para itens de imagem. A busca usa o **nome do item**, que é obrigatório antes de pesquisar. Com `PEXELS_API_KEY` no `.env`, usa o Pexels (fotos profissionais, chave gratuita); sem chave, o Openverse (sem cadastro, só licenças que permitem uso comercial e sem conteúdo sensível). A imagem escolhida é baixada para `data/uploads/`, então a TV mostra mesmo sem internet. O crédito do autor aparece discreto no canto inferior direito.
+- `PEXELS_API_KEY` no `.env.example`.
+- **Notícias (RSS)** (📰 Notícias): item próprio da playlist que mostra uma manchete por vez, com foto, fonte, "há X min", resumo e barra de tempo. Na próxima vez que o item entra, continua da manchete em que parou.
+  - 7 fontes prontas, testadas em 18/11/2026: g1 Últimas, g1 Rio, g1 Economia, Agência Brasil, BBC News Brasil, ge e InfoMoney. Aceita qualquer outro feed RSS ou Atom. Padrão: BBC + g1 Economia, que no teste trouxeram bem menos notícia policial.
+  - **Filtro de palavras** (cada palavra vale como início de palavra: "tortur" pega "tortura", "morta" não pega "imortal"), já preenchido nos itens novos com termos de crimes e tragédias. A lista é editável.
+  - Listas de vídeos ("VÍDEOS: …") e chamadas "ao vivo" do g1 são ignoradas; "VÍDEO:" no singular só perde o prefixo.
+  - Botão **Testar feeds** no formulário: mostra quantas manchetes passam pelo filtro, as 3 mais recentes e quais feeds falharam.
+  - Cache de 10 min por feed e atualização em segundo plano junto com o clima, então a tela abre sem esperar a internet. Sem internet, mostra as últimas manchetes baixadas. Um feed fora do ar não derruba os outros.
+- **Curiosidades e datas** ("Hoje é Dia de…"):
+  - **Item 📅 Hoje é dia** para as playlists: mostra as datas comemorativas de hoje, o feriado do dia e "Amanhã é feriado" / "Faltam N dias para o feriado" (até 15 dias antes). Em dia sem nada, a TV pula o item.
+  - **"Aparecer curiosidades durante o horário de serviço"** (Configurações): a TV intercala essa tela na playlist no ar, num horário (padrão 08:00–18:00), a cada N minutos (padrão 30) e por N segundos (padrão 15). Não interrompe item avulso agendado.
+  - **Lista curada** com 66 datas (comemorações, profissões, saúde, datas do Rio como São Sebastião e São Jorge), em `conteudo/datas_comemorativas.txt`. A lista em uso fica em `data/datas_comemorativas.txt` e é editada no painel, com validação linha a linha e botão para restaurar a padrão. Atualizar o sistema não apaga as alterações. Aceita datas fixas (`DD/MM`), móveis (`2º domingo/05` para o Dia das Mães, `último sábado/03`) e por dia do ano (`dia 256`, o Dia do Programador, que cai em 12/09 nos anos bissextos).
+  - **Feriados nacionais** da BrasilAPI, guardados em `data/feriados_AAAA.json` (depois de baixados, funcionam sem internet). Se a BrasilAPI estiver fora, tenta de novo só depois de 1 h, para não atrasar a TV. Quando a lista tem uma data com nome parecido no dia do feriado, só a da lista aparece; Carnaval de segunda não anuncia "amanhã é feriado" para a terça.
+  - Não usa a Wikipedia "neste dia", que no teste trouxe o massacre de Jonestown como primeiro fato do dia.
+  - Testar qualquer dia: `/view/today?d=AAAA-MM-DD`, ou o campo "Testar outro dia" nas Configurações.
+- **Leitura em voz alta das mensagens (Piper, offline):**
+  - Opção **🔊 Ler a mensagem em voz alta** no formulário da mensagem, com escolha de voz, velocidade (devagar, normal, rápida) e um texto próprio para leitura (ex.: "dezoito horas" em vez de "18h"). Sem ele, lê o título e o texto da tela. Botão **▶ Ouvir** para testar no painel.
+  - O áudio é gerado no próprio computador pelo Piper (open source, sem internet e sem custo), com voz pt-BR, e fica guardado em `data/tts/`: o mesmo texto não é gerado de novo.
+  - Instalação: **Configurações → Voz → Instalar voz** (acompanha o progresso no painel), pelo `instalar.bat` (novo passo opcional) ou por `python ferramentas/instalar_voz.py`. Vozes: faber (padrão), cadu e jeff. ~22 MB do programa + ~63 MB por voz, em `ferramentas/piper/` (fora do Git).
+  - As vozes ficam fixadas na versão `v1.0.0` do repositório de vozes: as de 11/2026 foram retreinadas para o Piper 1.5, que não tem executável para Windows, e o executável de 2023 as recusa.
+  - O Piper roda dentro da própria pasta e devolve o áudio cru, que o servidor grava como WAV. Assim funciona mesmo com acento no caminho (ex.: `C:\Users\Maurício\…`), onde o `piper.exe` quebra.
+  - Sem a voz instalada, a mensagem aparece normalmente, só que sem som.
+
+#### Alterado
+- O texto da mensagem agora é exibido como texto puro. Antes, um `<b>` digitado era interpretado como HTML; agora aparece literalmente. Para páginas com HTML, use o widget **HTML local**.
+- As cores das mensagens só aceitam o formato `#rrggbb`, para nenhum valor estranho ir direto para a página.
+
+#### Segurança
+- `/api/image-import` só baixa imagens que o próprio servidor devolveu numa busca da última hora, então não serve para baixar qualquer endereço. Também confere se a resposta é imagem e se tem até 15 MB.
+
 ### [0.9.0] — 2026-11-18
 #### Adicionado
 - **Widget de Contador Regressivo** (⏳ Contador): título, data e hora do evento, cores do fundo e do texto, segundos opcionais e texto exibido quando a hora chega (padrão "Chegou a hora!"). Mostra dias só enquanto faltar 1 dia ou mais. Com "Tirar da TV depois que a hora chegar", o player deixa de exibir o item sozinho. Tela em `/view/countdown/{id}`.

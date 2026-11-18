@@ -21,3 +21,6 @@ __pycache__/
 
 # Editor
 .vscode/
+
+# Voz (Piper + modelos pt-BR, ~85 MB): baixados por ferramentas/instalar_voz.py
+ferramentas/piper/
