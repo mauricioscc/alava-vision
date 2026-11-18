@@ -7,6 +7,11 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.6.3] — 2026-11-18
+#### Adicionado
+- `?inmet=off` no endereço da tela de clima simula o INMET fora do ar: os alertas somem e aparece o aviso "INMET indisponível". Funciona com a previsão real ou junto com os cenários `?demo=`.
+- Dois atalhos novos em Configurações → Pré-visualizar tela de clima: "INMET indisponível" (previsão real) e "Tempestade + INMET fora".
+
 ### [0.6.2] — 2026-11-18
 #### Adicionado
 - **Aviso de INMET indisponível na tela de clima.** Quando o Instituto Nacional de Meteorologia está fora do ar ou inacessível, a tela exibe um card cinza discreto no painel de alertas com o texto "INMET indisponível — Alertas não carregados". Antes os alertas simplesmente sumiam sem nenhum indicativo.
