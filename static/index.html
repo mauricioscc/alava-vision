@@ -30,6 +30,8 @@
                                      GRAD_PRESETS; prévia ao vivo #msg-live, msgPreviewSoon() → /view/message-preview
       notícias (RSS) ............... #cfg-news, NEWS_FEEDS, NEWS_BLOCK_DEFAULT, setNewsForm(), getNewsConfig(),
                                      testNews() → POST /api/news-test
+      voz da mensagem .............. #f-msg-speak, #f-msg-voice, #f-msg-rate, #f-msg-speak-text,
+                                     refreshVoiceOptions(), listenMsg() → POST /api/tts-preview
       buscar imagens na web ........ #img-picker, openImagePicker(), runImageSearch(), pickImage()
                                      → GET /api/image-search, POST /api/image-import (nome do item obrigatório)
     Pré-visualização ............... #pv-overlay, .pv-screen, .pv-media, openPreview(), fitFrame()
@@ -44,6 +46,7 @@
       salvar ....................... scheduleSave(), saveSchedule()  → PUT /api/schedule
     Configurações .................. #tab-settings, loadSettings(), saveSettings()
       curiosidades e datas ......... #card-today (#s-today-*, #s-curio), saveCuriosities(), resetCuriosities()
+      voz (instalar) ............... #card-voice, showVoiceStatus(), installVoice() → POST /api/tts-install
 -->
 <html lang="pt-BR">
 <head>
@@ -472,6 +475,20 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
       <div style="margin-top:16px"><button class="btn btn-primary" onclick="saveSettings()">Salvar configurações</button></div>
     </div>
 
+    <div class="card" style="margin-top:16px" id="card-voice">
+      <div class="section-title">🔊 Voz (leitura em voz alta)</div>
+      <p class="hint" style="margin-bottom:12px">Usa o <b>Piper</b>, open source, que roda neste computador, sem internet e sem custo.
+        Depois de ligar a opção "Ler em voz alta" numa mensagem, a TV fala o texto quando ela aparece. Instale no computador da TV.</p>
+      <p id="voice-status" style="margin-bottom:10px"></p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="s-voice" style="width:auto" aria-label="Voz para instalar">
+          <option value="faber">faber (padrão)</option><option value="cadu">cadu</option><option value="jeff">jeff</option></select>
+        <button class="btn btn-primary" id="btn-install-voice" onclick="installVoice()">Instalar voz</button>
+        <span class="hint">~22 MB do programa + ~63 MB por voz. Dá para instalar mais de uma.</span>
+      </div>
+      <pre id="voice-log" class="news-test" style="margin-top:10px" hidden></pre>
+    </div>
+
     <div class="card" style="margin-top:16px" id="card-today">
       <div class="section-title">📅 Curiosidades e datas</div>
       <p class="hint" style="margin-bottom:12px">"Hoje é Dia de…", feriado do dia e "Faltam N dias para o feriado". Os feriados nacionais
@@ -703,6 +720,20 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           </div>
         </div>
         <label class="check-line"><input type="checkbox" id="f-msg-clock" checked> Mostrar relógio</label>
+
+        <div class="sect">Voz</div>
+        <label class="check-line"><input type="checkbox" id="f-msg-speak" onchange="$('msg-voice').hidden=!this.checked"> 🔊 Ler a mensagem em voz alta quando aparecer na TV</label>
+        <div id="msg-voice" hidden class="form-group" style="gap:10px">
+          <p class="hint" id="msg-voice-status"></p>
+          <div class="row2">
+            <div class="form-group"><label for="f-msg-voice">Voz</label><select id="f-msg-voice"></select></div>
+            <div class="form-group"><label for="f-msg-rate">Velocidade</label>
+              <select id="f-msg-rate"><option value="slow">Devagar</option><option value="normal" selected>Normal</option><option value="fast">Rápida</option></select></div>
+          </div>
+          <div class="form-group"><label for="f-msg-speak-text">Texto para ler <span class="hint">(opcional; em branco, lê o título e o texto da tela)</span></label>
+            <textarea id="f-msg-speak-text" rows="2" placeholder="Ex.: escreva 'dezoito horas' em vez de '18h', se quiser controlar a pronúncia"></textarea></div>
+          <div class="inline"><button class="btn btn-ghost" type="button" id="btn-listen" onclick="listenMsg()">▶ Ouvir</button></div>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1208,8 +1239,38 @@ function setMsgForm(c) {
   $('f-msg-bold').checked = c.bold !== false;
   $('f-msg-shadow').checked = c.shadow ?? mode === 'image';
   $('f-msg-clock').checked = c.show_clock !== false;
+  $('f-msg-speak').checked = !!c.speak; $('msg-voice').hidden = !c.speak;
+  $('f-msg-rate').value = c.speak_rate || 'normal';
+  $('f-msg-speak-text').value = c.speak_text || '';
+  refreshVoiceOptions(c.speak_voice);
   setMsgImage(c.bg_image, c.bg_credit);
   msgModeChanged();
+}
+
+// ─── Voz (Piper) ─────────────────────────────────────────────────────────────
+let ttsStatus = null;
+async function refreshVoiceOptions(selected) {
+  try { ttsStatus = await api('GET', '/api/tts-status'); } catch(e) { return; }
+  const sel = $('f-msg-voice');
+  sel.innerHTML = ttsStatus.voices.map(v => `<option value="${v}">${v}</option>`).join('');
+  if (selected && ttsStatus.voices.includes(selected)) sel.value = selected;
+  $('msg-voice-status').innerHTML = ttsStatus.installed ? ''
+    : '⚠ A voz ainda não está instalada neste computador. A mensagem aparece normalmente, só que sem som. ' +
+      '<a href="#" onclick="closeModal();showTab(\'settings\');setTimeout(()=>$(\'card-voice\').scrollIntoView({behavior:\'smooth\'}),100);return false">Instalar a voz em Configurações</a>.';
+  $('btn-listen').disabled = !ttsStatus.installed;
+}
+let listenAudio = null;
+async function listenMsg() {
+  const cfg = getMsgConfig();
+  const btn = $('btn-listen'); btn.disabled = true; btn.textContent = 'Gerando…';
+  try {
+    const r = await fetch('/api/tts-preview', {method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
+      body: JSON.stringify(cfg)});
+    if (!r.ok) { let m = 'HTTP ' + r.status; try { m = (await r.json()).detail || m; } catch(e) {} throw new Error(m); }
+    if (listenAudio) listenAudio.pause();
+    listenAudio = new Audio(URL.createObjectURL(await r.blob())); listenAudio.play();
+  } catch(e) { status('Erro na voz: ' + e.message, 'err'); }
+  finally { btn.disabled = false; btn.textContent = '▶ Ouvir'; }
 }
 function getMsgConfig() {
   const mode = msgMode();
@@ -1223,6 +1284,8 @@ function getMsgConfig() {
     text_color: $('f-msg-fg').value, font_size: parseInt($('f-msg-size').value) || 72,
     font_family: $('f-msg-font').value, align: $('f-msg-align').value, animation: $('f-msg-anim').value,
     bold: $('f-msg-bold').checked, shadow: $('f-msg-shadow').checked, show_clock: $('f-msg-clock').checked,
+    speak: $('f-msg-speak').checked, speak_voice: $('f-msg-voice').value, speak_rate: $('f-msg-rate').value,
+    speak_text: $('f-msg-speak-text').value.trim(),
   };
 }
 
@@ -1818,6 +1881,7 @@ async function loadSettings() {
   $('s-today-every').value = s.today_every || 30;
   $('s-today-dur').value = s.today_duration || 15;
   try { $('s-curio').value = (await api('GET', '/api/curiosities')).text; } catch(e) {}
+  showVoiceStatus();
   // Atalhos de crepúsculo/amanhecer: simulam o horário (?hora=) a partir do pôr/nascer do sol de hoje.
   try {
     const w = await api('GET', '/api/weather');
@@ -1840,6 +1904,30 @@ async function saveSettings() {
     });
     status('Configurações salvas');
   } catch(e) { status('Erro ao salvar: ' + e.message, 'err'); }
+}
+
+async function showVoiceStatus() {
+  try {
+    const s = await api('GET', '/api/tts-status');
+    $('voice-status').innerHTML = !s.windows ? '⚠ A instalação automática é só para Windows.'
+      : s.installed ? `✔ Voz instalada: <b>${s.voices.join(', ')}</b>` : '⚠ Voz ainda não instalada neste computador.';
+    if (s.install.running || s.install.log.length) { $('voice-log').hidden = false; $('voice-log').textContent = s.install.log.join('\n'); }
+    $('btn-install-voice').disabled = s.install.running || !s.windows;
+    return s;
+  } catch(e) { return null; }
+}
+async function installVoice() {
+  try {
+    await api('POST', '/api/tts-install', {voice: $('s-voice').value});
+    $('voice-log').hidden = false; $('voice-log').textContent = 'Iniciando…';
+    const t = setInterval(async () => {
+      const s = await showVoiceStatus();
+      if (s && !s.install.running) {
+        clearInterval(t);
+        status(s.install.ok ? 'Voz instalada' : 'A instalação falhou, veja o registro abaixo', s.install.ok ? 'ok' : 'err');
+      }
+    }, 1500);
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
 }
 
 async function saveCuriosities() {

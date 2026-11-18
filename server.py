@@ -72,6 +72,9 @@ MAPA DO CÓDIGO
                                       (BrasilAPI → data/feriados_AAAA.json), today_auto_settings();
                                       lista: conteudo/datas_comemorativas.txt → data/datas_comemorativas.txt
                                       current_state()['today'] = {count, auto} para o player
+      voz (Piper, offline) .......... GET /api/tts/{id}.wav, POST /api/tts-preview, GET /api/tts-status,
+                                      POST /api/tts-install (roda ferramentas/instalar_voz.py), tts_wav()
+                                      (cache data/tts/, TTS_RATES), _speech_text(); Piper em ferramentas/piper/
       mensagem ...................... view_message() e view_message_preview() → _render_message()
                                       (fundo sólido/degradê/imagem, MSG_FONTS, MSG_ANIMS, _css_color())
     Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
@@ -1056,6 +1059,130 @@ def reset_curiosities():
     """Volta para a lista que vem com o sistema (conteudo/datas_comemorativas.txt)."""
     CURIO_FILE.write_text(CURIO_DEFAULT.read_text(encoding="utf-8"), encoding="utf-8")
     return {"text": curio_text()}
+
+
+# ─── Voz (Piper, offline) ─────────────────────────────────────────────────────
+#
+# Mensagem com config.speak: a tela toca /api/tts/{id}.wav ao abrir. O áudio é gerado pelo
+# Piper (ferramentas/piper/, instalado por ferramentas/instalar_voz.py ou pelo painel) e
+# guardado em data/tts/<hash>.wav: o mesmo texto com a mesma voz e velocidade não é gerado
+# de novo. Sem o Piper instalado, a rota responde 404 e a mensagem aparece sem som.
+
+TTS_DIR = DATA_DIR / "tts"
+PIPER_DIR = BASE / "ferramentas" / "piper"
+PIPER_EXE = PIPER_DIR / "piper.exe"
+TTS_RATES = {"slow": 1.35, "normal": 1.0, "fast": 0.8}   # length_scale do Piper: maior = mais devagar
+_tts_lock = threading.Lock()
+_tts_install: dict = {"running": False, "log": [], "ok": None}
+
+
+def tts_voices() -> list[str]:
+    d = PIPER_DIR / "vozes"
+    return sorted(p.name.split("-")[1] for p in d.glob("pt_BR-*.onnx")
+                  if p.with_suffix(".onnx.json").exists()) if d.exists() else []
+
+
+def tts_wav(text: str, voice: str = "", rate: str = "normal") -> Path:
+    """Gera (ou reaproveita) o .wav do texto. Erro claro se o Piper não estiver instalado."""
+    import hashlib
+    import subprocess
+    voices = tts_voices()
+    if not PIPER_EXE.exists() or not voices:
+        raise HTTPException(404, "Voz não instalada (Configurações → Voz → Instalar voz)")
+    voice = voice if voice in voices else ("faber" if "faber" in voices else voices[0])
+    scale = TTS_RATES.get(rate, 1.0)
+    text = " ".join(str(text).split())[:1500]
+    if not text:
+        raise HTTPException(400, "Nada para ler")
+    key = hashlib.sha1(f"{voice}|{scale}|{text}".encode("utf-8")).hexdigest()[:20]
+    out = TTS_DIR / f"{key}.wav"
+    if out.exists():
+        return out
+    import wave
+    TTS_DIR.mkdir(parents=True, exist_ok=True)
+    model = next((PIPER_DIR / "vozes").glob(f"pt_BR-{voice}-*.onnx"))
+    rate_hz = json.loads(model.with_suffix(".onnx.json").read_text(encoding="utf-8"))["audio"]["sample_rate"]
+    # O piper.exe de 2023 quebra (0xC0000409) com acento no caminho, ex.: C:\Users\Maurício\...
+    # Por isso roda DENTRO da pasta do Piper, com caminhos relativos, e devolve o áudio cru pela
+    # saída padrão; quem grava o .wav (em qualquer caminho) é o Python.
+    with _tts_lock:   # um de cada vez: o Piper usa bastante CPU
+        r = subprocess.run([str(PIPER_EXE), "--model", f"vozes/{model.name}", "--espeak_data", "espeak-ng-data",
+                            "--output_raw", "--length_scale", str(scale), "--sentence_silence", "0.35"],
+                           input=text.encode("utf-8"), capture_output=True, timeout=120, cwd=str(PIPER_DIR),
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0 or not r.stdout:
+        err = r.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or [f"código {r.returncode}"]
+        raise HTTPException(500, f"Piper falhou: {err[0]}")
+    tmp = out.with_suffix(".tmp")
+    with wave.open(str(tmp), "wb") as w:   # áudio cru do Piper: 16 bits, mono
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate_hz)
+        w.writeframes(r.stdout)
+    tmp.replace(out)
+    return out
+
+
+def _speech_text(cfg: dict) -> str:
+    """O que a mensagem fala: o texto próprio de leitura, se houver; senão título + texto."""
+    custom = str(cfg.get("speak_text") or "").strip()
+    if custom:
+        return custom
+    title, text = str(cfg.get("title") or "").strip(), str(cfg.get("text") or "").strip()
+    # O ponto depois do título faz o Piper dar uma pausa antes do texto.
+    return f"{title.rstrip('.!?:')}. {text}" if title and text else (title or text)
+
+
+@app.get("/api/tts/{item_id}.wav")
+def api_tts_item(item_id: str):
+    cfg = _item_config(item_id)
+    path = tts_wav(_speech_text(cfg), cfg.get("speak_voice", ""), cfg.get("speak_rate", "normal"))
+    return FileResponse(str(path), media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/tts-preview", dependencies=[Depends(require_auth)])
+async def api_tts_preview(request: Request):
+    """Painel: botão "Ouvir" do formulário de mensagem (gera sem salvar o item)."""
+    cfg = await request.json()
+    path = await asyncio.to_thread(tts_wav, _speech_text(cfg), cfg.get("speak_voice", ""), cfg.get("speak_rate", "normal"))
+    return FileResponse(str(path), media_type="audio/wav")
+
+
+@app.get("/api/tts-status")
+def api_tts_status():
+    return {"installed": PIPER_EXE.exists() and bool(tts_voices()), "voices": tts_voices(),
+            "available": ["faber", "cadu", "jeff"], "windows": os.name == "nt",
+            "install": {k: (v[-12:] if k == "log" else v) for k, v in _tts_install.items()}}
+
+
+@app.post("/api/tts-install", dependencies=[Depends(require_auth)])
+async def api_tts_install(request: Request):
+    """Baixa o Piper + a voz escolhida em segundo plano (ferramentas/instalar_voz.py)."""
+    import subprocess
+    voice = str((await request.json()).get("voice", "faber"))
+    if voice not in ("faber", "cadu", "jeff"):
+        raise HTTPException(400, "Voz desconhecida")
+    if _tts_install["running"]:
+        raise HTTPException(409, "A instalação já está em andamento")
+
+    def run():
+        _tts_install.update(running=True, log=[], ok=None)
+        import sys
+        try:
+            p = subprocess.Popen([sys.executable, str(BASE / "ferramentas" / "instalar_voz.py"), "--voz", voice],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=str(BASE),
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            for line in p.stdout:
+                _tts_install["log"].append(line.decode("utf-8", "replace").rstrip())
+            _tts_install["ok"] = p.wait() == 0
+        except Exception as e:
+            _tts_install["log"].append(f"Erro: {e}")
+            _tts_install["ok"] = False
+        finally:
+            _tts_install["running"] = False
+
+    threading.Thread(target=run, name="instalar-voz", daemon=True).start()
+    return {"started": True}
 
 
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")

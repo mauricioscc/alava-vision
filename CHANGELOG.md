@@ -29,6 +29,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
   - **Feriados nacionais** da BrasilAPI, guardados em `data/feriados_AAAA.json` (depois de baixados, funcionam sem internet). Se a BrasilAPI estiver fora, tenta de novo só depois de 1 h, para não atrasar a TV. Quando a lista tem uma data com nome parecido no dia do feriado, só a da lista aparece; Carnaval de segunda não anuncia "amanhã é feriado" para a terça.
   - Não usa a Wikipedia "neste dia", que no teste trouxe o massacre de Jonestown como primeiro fato do dia.
   - Testar qualquer dia: `/view/today?d=AAAA-MM-DD`, ou o campo "Testar outro dia" nas Configurações.
+- **Leitura em voz alta das mensagens (Piper, offline):**
+  - Opção **🔊 Ler a mensagem em voz alta** no formulário da mensagem, com escolha de voz, velocidade (devagar, normal, rápida) e um texto próprio para leitura (ex.: "dezoito horas" em vez de "18h"). Sem ele, lê o título e o texto da tela. Botão **▶ Ouvir** para testar no painel.
+  - O áudio é gerado no próprio computador pelo Piper (open source, sem internet e sem custo), com voz pt-BR, e fica guardado em `data/tts/`: o mesmo texto não é gerado de novo.
+  - Instalação: **Configurações → Voz → Instalar voz** (acompanha o progresso no painel), pelo `instalar.bat` (novo passo opcional) ou por `python ferramentas/instalar_voz.py`. Vozes: faber (padrão), cadu e jeff. ~22 MB do programa + ~63 MB por voz, em `ferramentas/piper/` (fora do Git).
+  - As vozes ficam fixadas na versão `v1.0.0` do repositório de vozes: as de 11/2026 foram retreinadas para o Piper 1.5, que não tem executável para Windows, e o executável de 2023 as recusa.
+  - O Piper roda dentro da própria pasta e devolve o áudio cru, que o servidor grava como WAV. Assim funciona mesmo com acento no caminho (ex.: `C:\Users\Maurício\…`), onde o `piper.exe` quebra.
+  - Sem a voz instalada, a mensagem aparece normalmente, só que sem som.
 
 #### Alterado
 - O texto da mensagem agora é exibido como texto puro. Antes, um `<b>` digitado era interpretado como HTML; agora aparece literalmente. Para páginas com HTML, use o widget **HTML local**.
