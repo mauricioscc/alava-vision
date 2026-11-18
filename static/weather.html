@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Tela de clima (static/weather.html) · versão 0.6.1
+  Alava Vision — Tela de clima (static/weather.html) · versão 0.6.2
 
   COMO ABRIR / TESTAR (servidor rodando na porta 8080)
     http://localhost:8080/view/weather                         previsão real
@@ -21,6 +21,7 @@
     Códigos de tempo (WMO) ...... DESC, INTENSITY, kindOf(), desc()
     Ícones SVG .................. icon(), sunI(), moonI(), cloudI()
     Dados / modo demonstração ... let W (previsão embutida pelo servidor), load(), fakeData(), applyDemo()
+    INMET indisponível .......... W.inmet_status === 'unavailable' → card cinza no painel de alertas (NO_SIGNAL)
     Abertura instantânea ........ final do script: com W embutido desenha na hora, sem rede
     Fonte ....................... @font-face com static/fonts/inter-latin.woff2 (sem Google Fonts)
     Preenchimento da tela ....... render()
@@ -109,6 +110,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0b1530;color:#fff;
   backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);text-shadow:none;animation:pulse 2.4s infinite}
 .tag.orange{--c:#FF7A1A;--ct:#1f0d00}
 .tag.red{--c:#EF2D2D;--ct:#fff}
+.tag.inmet-off{--c:#525a6a;--ct:#cdd2db;animation:none;opacity:.78}
 .tag .ic{flex:none;width:4.8vh;height:4.8vh;border-radius:50%;background:var(--c);color:var(--ct);
   display:grid;place-items:center}
 .tag .ic svg{width:2.8vh;height:2.8vh}
@@ -221,6 +223,7 @@ function icon(code, day) {
 }
 const DROP = '<svg viewBox="0 0 24 24"><path d="M12 3s-6 7-6 11a6 6 0 0 0 12 0c0-4-6-11-6-11z" fill="#8fd0ff"/></svg>';
 const WARN = '<svg viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M12 10v5M12 18v.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
+const NO_SIGNAL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg>';
 
 // ─── Dados ────────────────────────────────────────────────────────────────────
 const DEMO_CODES = {clear:0, partly:2, overcast:3, fog:45, drizzle:53, rain:63, heavy:65, storm:95, hail:99, snow:73};
@@ -339,6 +342,13 @@ function render() {
 
   const SEV = {yellow: 'Atenção', orange: 'Alerta', red: 'Perigo'};
   const list = W.alerts || [], shown = list.slice(0, 3);
+  const inmetOff = W.inmet_status === 'unavailable'
+    ? `<div class="tag inmet-off"><div class="ic">${NO_SIGNAL}</div><div>` +
+      `<div class="t">INMET indisponível</div>` +
+      `<span class="s">Alertas não carregados</span>` +
+      `<div class="w">Instituto Nacional de Meteorologia inacessível</div>` +
+      `</div></div>`
+    : '';
   $('alerts').innerHTML = shown.map(a => `
     <div class="tag ${a.severity}">
       <div class="ic">${WARN}</div>
@@ -347,7 +357,7 @@ function render() {
         <span class="s">${SEV[a.severity] || 'Aviso'} · ${a.source}</span>
         <div class="w">${a.end ? 'Até ' + fmtEnd(a.end) : (a.detail || '')}</div>
       </div>
-    </div>`).join('') + (list.length > 3 ? `<div class="more">+${list.length - 3} avisos ativos</div>` : '');
+    </div>`).join('') + (list.length > 3 ? `<div class="more">+${list.length - 3} avisos ativos</div>` : '') + inmetOff;
 
   Sky.setScene({kind: kindOf(c.code), intensity: INTENSITY[c.code] || 0, day, wind: c.wind || 0, gust: c.gust || 0},
     W.sunrise, W.sunset);
