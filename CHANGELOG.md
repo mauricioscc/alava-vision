@@ -7,6 +7,54 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.11.0] — 2026-11-18
+#### Adicionado
+- **Programação por dia da semana.** A aba Programação ganhou o seletor **Régua**: *Todos os dias*, *Seg* a *Dom* e uma data específica.
+  - Um dia sem régua própria segue *Todos os dias*. A régua herdada aparece apagada, só para consulta, com os botões **Criar régua própria copiando…** e **Criar vazia**. Soltar uma playlist ou item nela também cria a régua própria, copiando a herdada.
+  - **↻ Repetir nos dias úteis:** copia a régua aberta para segunda a sexta de uma vez. **Copiar para…** escolhe os dias, com atalhos *Dias úteis* e *Fim de semana*. Antes de substituir, o painel avisa quais dias já têm programação própria.
+  - **Remover régua própria:** o dia volta a seguir o nível de cima.
+  - Os dias com régua própria ficam marcados com um ponto laranja no seletor.
+- **Aba Calendário:** o mês inteiro, com a régua que vale em cada dia pela cor da borda (cinza *Todos os dias*, azul *dia da semana*, laranja *exceção*). Cada dia mostra o feriado nacional (BrasilAPI), uma faixa de 24 h com os blocos e as playlists agendadas. Ao clicar num dia, o painel ao lado mostra o motivo da régua escolhida e a lista de horários. Dali dá para:
+  - **criar exceção para o dia**, que começa como cópia da régua em vigor e abre na Programação;
+  - **exibir uma playlist o dia todo**;
+  - **remover a exceção**;
+  - abrir a régua do dia da semana ou a de *Todos os dias*.
+- **Ordem de decisão da TV:** 1) exceção da data; 2) régua do dia da semana; 3) *Todos os dias*. Dentro da régua escolhida valem as regras de antes: item avulso > playlist > **Playlist padrão** nos horários vazios. A régua é escolhida inteira. Uma régua própria vazia também vale e deixa o dia todo na Playlist padrão, o que serve, por exemplo, para um feriado.
+- O topo do painel ("No ar") mostra a régua de hoje quando ela não é *Todos os dias*. `/api/player/state` ganhou o campo `ruler`.
+- Cada playlist tem uma cor própria na biblioteca, na timeline e no calendário.
+- **📣 Avisos por data** (painel do dia no Calendário → *Adicionar aviso para este dia*): o formulário de item abre só com os tipos que fazem sentido.
+  - **Mensagem:** já vem com título e texto da data ("Hoje é Dia do Professor" + o texto da lista) e um degradê na cor do tipo de data.
+  - **Imagem:** a busca na web abre sozinha, pesquisando pelo nome da data.
+  - **Contador:** contagem regressiva até o dia, começando 7 dias antes por padrão.
+  - **Hoje é dia:** só em dia com feriado ou data comemorativa.
+  - Escolha o assunto (feriado, data da lista ou outro), **quantos dias antes** começa a aparecer, **o dia todo ou só no horário de serviço** e **repetir todo ano**.
+  - O aviso anual acompanha a data móvel: Carnaval, Páscoa e Corpus Christi pela BrasilAPI, Dia das Mães pela lista. Num feriado de dois dias, ele segue o mesmo dia (o 1º ou o 2º). 29/02 cai em 28/02 nos outros anos.
+  - Na TV, o aviso é **intercalado**: entra no fim da rotação do que estiver no ar, sem mexer na programação. Isso vale também durante um item avulso agendado, que passa a alternar com os avisos do dia. Sem isso, uma programação feita só de itens avulsos nunca mostraria os avisos.
+  - No calendário, o dia ganha o selo 📣 N, e o painel do dia lista os avisos ("faltam 5 dias") com editar e excluir.
+  - Os avisos ficam na playlist reservada `avisos` ("Avisos por data"), com `config.notice = {date, days_before, yearly, anchor, hours, title}`. Essa playlist não aparece nas listas do painel e não pode ser excluída.
+- O calendário mostra as **datas comemorativas da lista curada** de cada dia (📅). Quando a data da lista é o próprio feriado (ex.: Natal), ela não se repete: o texto dela aparece junto do feriado.
+- **Zoom livre na linha do tempo da Programação** (no lugar dos 3 botões fixos):
+  - Atalhos *Dia todo*, *Hora*, *30 min*, *15 min*, *5 min* e *1 min*, botões − e + e uma barra deslizante.
+  - **Mouse:** Ctrl + roda em qualquer ponto da linha do tempo (o movimento de pinça do touchpad também funciona), ou só a roda sobre a faixa de horas. O zoom fica centrado no horário sob o mouse. Arrastar a faixa de horas rola para os lados.
+  - A grade se ajusta sozinha ao zoom (marcas e encaixe dos blocos de 1, 5, 10, 15 ou 30 min; com o dia todo na tela, de hora em hora). O texto ao lado da barra mostra a grade atual.
+  - O zoom escolhido fica guardado no navegador.
+- **Duplicar item:** botão ⧉ em cada item da playlist. A cópia entra logo abaixo do original, com o nome "… (cópia)", a mesma configuração, a mesma duração e o mesmo estado (ativo ou desativado). No formulário do item, **⧉ Salvar e duplicar** salva e já abre a cópia para editar: dá para criar várias mensagens parecidas em sequência. A cópia usa os mesmos arquivos (imagem, vídeo, HTML) sem copiá-los, e editar ou remover um dos dois não afeta o outro.
+- **Duplicar playlist:** botão **⧉ Duplicar** ao lado de *Renomear*. Pede o nome da cópia (sugere "… (cópia)") e abre a playlist nova com cópias de todos os itens, na mesma ordem. A programação (blocos da timeline) não é copiada. `POST /api/items/{id}/duplicate` e `POST /api/playlists/{id}/duplicate`.
+- **Logo da Alava no widget de notícias:** no cabeçalho, à esquerda do título, separada por um traço fino na cor de destaque. Usa o `assets/watermark.png` (branco, fundo transparente), que é a versão com melhor contraste no fundo azul-escuro e tem o mesmo tamanho do logo do clima e do trânsito. Pode ser desligada no item (*Mostrar a logo da Alava no cabeçalho*).
+#### Banco de dados
+- `schedule.scope`: régua de cada bloco. Pode ser `all`, `wd:1`…`wd:7` (1 = segunda, como `isoweekday()`) ou `date:AAAA-MM-DD`. Os blocos existentes viram `all` na primeira execução, então a programação atual continua igual.
+- Tabela nova `rulers(scope, created_at)`, com as réguas próprias criadas. É ela que diferencia uma régua própria vazia de um dia sem régua.
+- `GET /api/notices` (avisos). `/api/calendar` ganhou `dates`, `holiday_text` e `notices` em cada dia, e `/api/player/state` ganhou `notices`, os ids dos avisos intercalados agora.
+- API: `GET/PUT/DELETE /api/schedule?scope=…` (sem `scope` continua sendo *Todos os dias*), `GET /api/schedule/rulers`, `POST /api/schedule/copy` e `GET /api/calendar?month=AAAA-MM`.
+#### Corrigido
+- **A TV voltava para o 1º item da playlist a cada salvamento no painel.** Quem estava configurando o painel via o primeiro item recomeçar várias vezes (ex.: Notícias de 300 s repetindo). Agora o player só recomeça do início quando a programação troca de bloco. Ao salvar no painel:
+  - o item na tela continua, se não foi alterado;
+  - aparece de novo já com a mudança, se foi editado;
+  - a TV passa para o próximo, se ele foi removido ou desativado.
+  (`player.py`: `after_change()`)
+- O rodapé do painel mostrava "v0.6.1".
+- A explicação "Como a TV decide o que exibir" agora cita os avisos do dia durante os itens avulsos.
+
 ### [0.10.0] — 2026-11-18
 #### Adicionado
 - **Mensagem com muito mais opções:**

@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.10.0
+Alava Vision — Servidor (server.py) · versão 0.11.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -7,7 +7,11 @@ COMO RODAR
     Painel ........ http://localhost:8080/   (usuário "admin", senha = ADMIN_PASSWORD do .env)
     Testes rápidos no navegador:
         http://localhost:8080/api/player/state  → o que o player deve exibir AGORA (resultado da grade)
-        http://localhost:8080/api/schedule      → blocos salvos na timeline
+        http://localhost:8080/api/schedule      → blocos da régua "Todos os dias"
+        http://localhost:8080/api/schedule?scope=wd:1            → régua de segunda-feira (wd:1..wd:7)
+        http://localhost:8080/api/schedule?scope=date:2026-12-24 → exceção de uma data
+        http://localhost:8080/api/schedule/rulers               → réguas próprias criadas
+        http://localhost:8080/api/calendar?month=2026-12        → panorama do mês (régua de cada dia)
         http://localhost:8080/api/weather       → dados de clima usados na tela de previsão
         http://localhost:8080/view/countdown/<id_do_item>  → contador regressivo de um item
         http://localhost:8080/view/html/<id_do_item>       → página HTML local de um item
@@ -25,6 +29,10 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.10.0 (antes do calendário e das réguas por dia da semana):
+        git checkout 8c60d7f -- server.py static/index.html
+        A 0.10.0 lê só a régua "Todos os dias" (os blocos das outras réguas ficam no banco, ignorados).
+        Para limpar: DELETE FROM schedule WHERE scope<>'all'; DELETE FROM rulers;
     Para a 0.9.0 (antes da mensagem avançada, RSS, curiosidades e voz):
         git checkout 027e198 -- server.py player.py static/index.html
         Mensagens novas continuam abrindo na 0.9.0, só sem as opções extras (fundo, fonte...).
@@ -40,11 +48,23 @@ MAPA DO CÓDIGO
     Configuração (.env) ............. constantes logo abaixo dos imports
     Banco e migração ................ db(), init_db()
     Autenticação .................... require_auth(), GET /api/ping
-    Playlists ....................... GET/POST /api/playlists, PUT/DELETE /api/playlists/{id}
+    Playlists ....................... GET/POST /api/playlists, PUT/DELETE /api/playlists/{id},
+                                      POST /api/playlists/{id}/duplicate (cópia com todos os itens)
     Itens ........................... GET /api/playlist, POST /api/items,
-                                      PUT /api/items/reorder, PUT/DELETE /api/items/{id}
-    Grade horária (timeline) ........ GET/PUT /api/schedule, _clean_block()
-    O que está no ar agora .......... resolve_now(), _pick_block(), current_state(), GET /api/player/state
+                                      PUT /api/items/reorder, PUT/DELETE /api/items/{id},
+                                      POST /api/items/{id}/duplicate (cópia logo abaixo), _copy_item()
+    Grade horária (timeline) ........ GET/PUT/DELETE /api/schedule (?scope=), _clean_block(), _write_ruler()
+      réguas por dia / exceções ..... tabela rulers + coluna schedule.scope; _check_scope(), scope_label(),
+                                      ruler_for_day() (PRIORIDADE: exceção > dia da semana > Todos os dias)
+      dias úteis / copiar ........... POST /api/schedule/copy, GET /api/schedule/rulers
+      calendário (panorama do mês) .. GET /api/calendar?month=AAAA-MM (régua, blocos, feriado, datas da lista
+                                      e avisos de cada dia)
+    Avisos por data ................. playlist reservada NOTICE_PLAYLIST ('avisos'), config.notice; notice_date()
+                                      (repete todo ano seguindo feriado/data móvel), notice_occurrence(),
+                                      notices_now() → intercalados no fim da playlist em resolve_now();
+                                      GET /api/notices; contador anual em view_countdown()
+    O que está no ar agora .......... resolve_now() (escolhe a régua do dia), _pick_block(), current_state(),
+                                      GET /api/player/state (campo "ruler" = régua em uso hoje)
     Aviso instantâneo (WebSocket) ... WS /ws/player, _players, _broadcast(), _push_watcher(),
                                       _notify_players() (middleware: avisa após salvar no painel)
     Upload e arquivos ............... POST /api/upload, /uploads/* e /assets/* (StaticFiles)
@@ -64,7 +84,7 @@ MAPA DO CÓDIGO
                                       /view/traffic, /view/message/{id},
                                       /view/html/{id} (redireciona para /html/...), /view/countdown/{id}
       vídeo repetir ou não .......... view_video(): config.loop (padrão True)
-      notícias (RSS) ................ /view/news/{id}, GET /api/news/{id}, POST /api/news-test,
+      notícias (RSS) ................ /view/news/{id} (logo Alava no cabeçalho: config.show_logo, .top .logo), GET /api/news/{id}, POST /api/news-test,
                                       get_news() (filtro, sem repetidas), _fetch_feed() (cache NEWS_TTL),
                                       _parse_feed() (RSS e Atom), _warm_news() (em 2º plano, com o clima)
       curiosidades e datas .......... /view/today (?d=AAAA-MM-DD), GET /api/today, GET/PUT /api/curiosities,
@@ -77,14 +97,15 @@ MAPA DO CÓDIGO
                                       (cache data/tts/, TTS_RATES), _speech_text(); Piper em ferramentas/piper/
       mensagem ...................... view_message() e view_message_preview() → _render_message()
                                       (fundo sólido/degradê/imagem, MSG_FONTS, MSG_ANIMS, _css_color())
-    Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html
-                                      Só clima e trânsito exibem o logo; sites, imagens, vídeos e
-                                      mensagens aparecem sem ele.
+    Logo Alava ...................... faixa do topo em view_traffic(); na tela de clima, .brand em weather.html;
+                                      nas notícias, cabeçalho de view_news() (0.11.0, pode desligar no item).
+                                      Sites, imagens, vídeos e mensagens aparecem sem ele.
 """
 import asyncio
 import html
 import json
 import os
+import re as _re
 import secrets
 import sqlite3
 import threading
@@ -92,7 +113,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime
+from datetime import date as _date, datetime, timedelta as _timedelta
 from pathlib import Path
 
 import aiofiles
@@ -103,7 +124,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 load_dotenv()
 
@@ -189,6 +210,9 @@ def init_db():
             )""")
         con.execute("INSERT OR IGNORE INTO playlists VALUES (?,?,?)",
                     (DEFAULT_PLAYLIST, "Playlist padrão", int(time.time())))
+        # 0.11.0: playlist reservada dos avisos por data (fica fora das listas do painel)
+        con.execute("INSERT OR IGNORE INTO playlists VALUES (?,?,?)",
+                    ("avisos", "Avisos por data", int(time.time())))
         # Grade horária: cada bloco aponta para uma playlist (trilha base)
         # ou para um item avulso (trilha de sobreposição). Minutos do dia: 0–1440.
         con.execute("""
@@ -198,6 +222,20 @@ def init_db():
                 ref_id     TEXT NOT NULL,
                 start_min  INTEGER NOT NULL,
                 end_min    INTEGER NOT NULL,
+                created_at INTEGER
+            )""")
+        # 0.11.0: cada bloco pertence a uma "régua" (scope). Blocos antigos ficam em 'all'
+        # ("Todos os dias"), então quem atualiza continua com a mesma programação.
+        scols = {r["name"] for r in con.execute("PRAGMA table_info(schedule)")}
+        if "scope" not in scols:
+            con.execute("ALTER TABLE schedule ADD COLUMN scope TEXT NOT NULL DEFAULT 'all'")
+        con.execute("CREATE INDEX IF NOT EXISTS schedule_scope ON schedule(scope)")
+        # Réguas próprias criadas (dia da semana 'wd:1'..'wd:7' ou exceção 'date:AAAA-MM-DD').
+        # A linha existir já basta: uma régua própria VAZIA também vale (o dia inteiro na
+        # Playlist padrão), por isso não dá para deduzir isso só pelos blocos.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS rulers (
+                scope      TEXT PRIMARY KEY,
                 created_at INTEGER
             )""")
         con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
@@ -239,7 +277,8 @@ def list_playlists():
             SELECT p.id, p.name, COUNT(i.id) AS item_count,
                    COALESCE(SUM(CASE WHEN i.active = 1 THEN i.duration END), 0) AS total_duration
             FROM playlists p LEFT JOIN items i ON i.playlist_id = p.id
-            GROUP BY p.id ORDER BY (p.id != ?), p.created_at""", (DEFAULT_PLAYLIST,)).fetchall()
+            WHERE p.id != ?
+            GROUP BY p.id ORDER BY (p.id != ?), p.created_at""", (NOTICE_PLAYLIST, DEFAULT_PLAYLIST)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -266,10 +305,34 @@ async def rename_playlist(pid: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/playlists/{pid}/duplicate", dependencies=[Depends(require_auth)])
+async def duplicate_playlist(pid: str, request: Request):
+    """Cria uma playlist nova com cópias de todos os itens (mesma ordem, mesmo ativo/desativado).
+    A programação (blocos da timeline) não é copiada. Corpo: {"name": "Nome da cópia"}."""
+    if pid == NOTICE_PLAYLIST:
+        raise HTTPException(400, "A playlist dos avisos por data não pode ser duplicada")
+    name = str((await request.json()).get("name", "")).strip()
+    with db() as con:
+        src = con.execute("SELECT name FROM playlists WHERE id=?", (pid,)).fetchone()
+        if not src:
+            raise HTTPException(404)
+        new_id = uuid.uuid4().hex[:12]
+        name = name or f"{src['name']} (cópia)"
+        con.execute("INSERT INTO playlists VALUES (?,?,?)", (new_id, name, int(time.time())))
+        rows = con.execute("SELECT * FROM items WHERE playlist_id=? ORDER BY ord, created_at", (pid,)).fetchall()
+        for i, r in enumerate(rows):
+            _copy_item(con, r, new_id, i, r["name"])
+        bump_version(con)
+        con.commit()
+    return {"id": new_id, "name": name, "items": len(rows)}
+
+
 @app.delete("/api/playlists/{pid}", dependencies=[Depends(require_auth)])
 def delete_playlist(pid: str):
     if pid == DEFAULT_PLAYLIST:
         raise HTTPException(400, "A playlist padrão não pode ser excluída")
+    if pid == NOTICE_PLAYLIST:
+        raise HTTPException(400, "A playlist dos avisos por data é do sistema")
     with db() as con:
         item_ids = [r["id"] for r in con.execute("SELECT id FROM items WHERE playlist_id=?", (pid,))]
         for iid in item_ids:
@@ -346,6 +409,38 @@ async def update_item(item_id: str, request: Request):
     return {"ok": True}
 
 
+# ─── Duplicar (0.11.0) ────────────────────────────────────────────────────────
+# A cópia aponta para os mesmos arquivos (imagem, vídeo, HTML em data/uploads e data/html):
+# remover um item não apaga arquivos, então original e cópia continuam funcionando sozinhos.
+
+def _copy_item(con: sqlite3.Connection, row: sqlite3.Row, playlist_id: str, ord_: int, name: str) -> str:
+    new_id = uuid.uuid4().hex[:12]
+    con.execute("INSERT INTO items (id,type,name,config,duration,active,ord,created_at,playlist_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (new_id, row["type"], name, row["config"], row["duration"], row["active"], ord_,
+                 int(time.time()), playlist_id))
+    return new_id
+
+
+@app.post("/api/items/{item_id}/duplicate", dependencies=[Depends(require_auth)])
+def duplicate_item(item_id: str):
+    """Copia o item para logo abaixo dele na mesma playlist, com o nome "… (cópia)"."""
+    with db() as con:
+        row = con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+        if not row:
+            raise HTTPException(404)
+        # Reorganiza a ordem da playlist (0, 1, 2...) e abre espaço logo depois do original
+        ids = [r["id"] for r in con.execute("SELECT id FROM items WHERE playlist_id=? ORDER BY ord, created_at",
+                                            (row["playlist_id"],))]
+        pos = ids.index(item_id)
+        for i, iid in enumerate(ids):
+            con.execute("UPDATE items SET ord=? WHERE id=?", (i if i <= pos else i + 1, iid))
+        new_id = _copy_item(con, row, row["playlist_id"], pos + 1, f"{row['name']} (cópia)")
+        bump_version(con)
+        con.commit()
+    return {"id": new_id}
+
+
 @app.delete("/api/items/{item_id}", dependencies=[Depends(require_auth)])
 def delete_item(item_id: str):
     with db() as con:
@@ -356,19 +451,81 @@ def delete_item(item_id: str):
     return {"ok": True}
 
 
-# ─── Grade horária (timeline) ─────────────────────────────────────────────────
+# ─── Grade horária (timeline) e calendário ────────────────────────────────────
 #
-# REGRA DE PRIORIDADE (a mesma explicada no painel):
+# RÉGUAS (0.11.0). Uma "régua" é a grade de 00:00 a 23:59 de um dia. Existem três níveis:
+#   'all'               → "Todos os dias" (a régua única das versões anteriores);
+#   'wd:1' … 'wd:7'     → régua própria de um dia da semana (1 = segunda … 7 = domingo,
+#                         como date.isoweekday()). "Dias úteis" = copiar para wd:1..wd:5;
+#   'date:AAAA-MM-DD'   → exceção de uma data específica (feriado, evento...).
+#
+# QUAL RÉGUA VALE NUM DIA (ruler_for_day). A régua é escolhida INTEIRA, não bloco a bloco:
+#   1. existe exceção para a data              → usa a exceção;
+#   2. senão, o dia da semana tem régua própria → usa a do dia da semana;
+#   3. senão                                    → usa "Todos os dias".
+#   Uma régua própria vazia também conta: o dia fica todo na Playlist padrão.
+#   Para "só mudar o almoço de sexta", o painel cria a régua de sexta copiando a de
+#   "Todos os dias" e aí se edita só o trecho desejado.
+#
+# DENTRO DA RÉGUA ESCOLHIDA (resolve_now), a mesma regra de sempre:
 #   1. Item avulso com bloco no horário atual → a TV mostra só esse item.
 #      Ele "sobrepõe" temporariamente qualquer playlist da trilha base.
 #   2. Senão, playlist com bloco no horário atual → a TV roda essa playlist.
-#   3. Senão (ou se o bloco aponta para algo vazio/desativado) → Playlist padrão.
+#   3. Senão (ou se o bloco aponta para algo vazio/desativado) → Playlist padrão (fallback).
 #   Dois blocos da MESMA trilha no mesmo horário: vence o que começou mais
 #   tarde (o mais específico, ex.: 12:00–13:00 dentro de 08:00–18:00).
 #   Se começarem juntos, vence o mais curto.
 
+WEEKDAY_NAMES = {1: "Segunda-feira", 2: "Terça-feira", 3: "Quarta-feira", 4: "Quinta-feira",
+                 5: "Sexta-feira", 6: "Sábado", 7: "Domingo"}
+_SCOPE_RE = _re.compile(r"^(all|wd:[1-7]|date:\d{4}-\d{2}-\d{2})$")
+
+
 def _hhmm(minutes: int) -> str:
     return "24:00" if minutes == 1440 else f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _check_scope(scope: str | None) -> str:
+    """Valida o nome da régua (padrão 'all', compatível com o painel antigo)."""
+    scope = (scope or "all").strip()
+    if not _SCOPE_RE.match(scope):
+        raise HTTPException(400, f"Régua inválida: {scope}")
+    if scope.startswith("date:"):
+        try:
+            _date.fromisoformat(scope[5:])
+        except ValueError:
+            raise HTTPException(400, f"Data inválida: {scope[5:]}")
+    return scope
+
+
+def scope_label(scope: str) -> str:
+    if scope == "all":
+        return "Todos os dias"
+    if scope.startswith("wd:"):
+        return WEEKDAY_NAMES[int(scope[3:])]
+    d = _date.fromisoformat(scope[5:])
+    return f"Exceção {d.strftime('%d/%m/%Y')}"
+
+
+def _custom_scopes(con: sqlite3.Connection) -> set[str]:
+    return {r["scope"] for r in con.execute("SELECT scope FROM rulers")}
+
+
+def ruler_for_day(day: _date, custom: set[str]) -> str:
+    """Aplica a hierarquia: exceção da data > régua do dia da semana > Todos os dias."""
+    exc = f"date:{day.isoformat()}"
+    if exc in custom:
+        return exc
+    wd = f"wd:{day.isoweekday()}"
+    if wd in custom:
+        return wd
+    return "all"
+
+
+def _blocks_of(con: sqlite3.Connection, scope: str) -> list[dict]:
+    rows = con.execute("SELECT id, kind, ref_id, start_min, end_min FROM schedule WHERE scope=? "
+                       "ORDER BY start_min", (scope,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def _clean_block(b: dict, playlist_ids: set, item_ids: set) -> dict:
@@ -386,28 +543,173 @@ def _clean_block(b: dict, playlist_ids: set, item_ids: set) -> dict:
             "start_min": start, "end_min": end}
 
 
+def _write_ruler(con: sqlite3.Connection, scope: str, blocks: list[dict]) -> list[dict]:
+    """Troca os blocos de uma régua. Os ids são únicos no banco inteiro: um id que já existe
+    em OUTRA régua (ex.: blocos copiados no painel) ganha um id novo."""
+    pl = {r["id"] for r in con.execute("SELECT id FROM playlists")}
+    it = {r["id"] for r in con.execute("SELECT id FROM items")}
+    taken = {r["id"] for r in con.execute("SELECT id FROM schedule WHERE scope<>?", (scope,))}
+    clean, seen = [], set()
+    for b in blocks:
+        c = _clean_block(b, pl, it)
+        if c["id"] in taken or c["id"] in seen:
+            c["id"] = uuid.uuid4().hex[:12]
+        seen.add(c["id"])
+        clean.append(c)
+    now = int(time.time())
+    con.execute("DELETE FROM schedule WHERE scope=?", (scope,))
+    con.executemany("INSERT INTO schedule (id, kind, ref_id, start_min, end_min, created_at, scope) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    [(b["id"], b["kind"], b["ref_id"], b["start_min"], b["end_min"], now, scope) for b in clean])
+    if scope != "all":
+        con.execute("INSERT OR IGNORE INTO rulers VALUES (?,?)", (scope, now))
+    return clean
+
+
 @app.get("/api/schedule")
-def get_schedule():
+def get_schedule(scope: str = "all"):
+    """Blocos de uma régua. `custom` diz se ela existe; se não existir, `inherits` diz qual
+    régua vale no lugar dela (e `blocks` traz os blocos dessa, só para mostrar)."""
+    scope = _check_scope(scope)
     with db() as con:
-        rows = con.execute("SELECT id, kind, ref_id, start_min, end_min FROM schedule ORDER BY start_min").fetchall()
-    return {"blocks": [dict(r) for r in rows]}
+        custom = _custom_scopes(con)
+        own = scope == "all" or scope in custom
+        if own:
+            inherits = None
+        elif scope.startswith("date:"):
+            inherits = ruler_for_day(_date.fromisoformat(scope[5:]), custom)
+        else:
+            inherits = "all"
+        blocks = _blocks_of(con, scope if own else inherits)
+    return {"scope": scope, "label": scope_label(scope), "custom": own, "inherits": inherits,
+            "inherits_label": scope_label(inherits) if inherits else None, "blocks": blocks}
+
+
+@app.get("/api/schedule/rulers")
+def list_rulers():
+    """Réguas próprias criadas, com a quantidade de blocos de cada uma."""
+    with db() as con:
+        counts = {r["scope"]: r["n"] for r in con.execute("SELECT scope, COUNT(*) AS n FROM schedule GROUP BY scope")}
+        scopes = sorted(_custom_scopes(con))
+    return {"rulers": [{"scope": s, "label": scope_label(s), "blocks": counts.get(s, 0)} for s in scopes],
+            "all_blocks": counts.get("all", 0)}
 
 
 @app.put("/api/schedule", dependencies=[Depends(require_auth)])
 async def save_schedule(request: Request):
-    """Substitui a grade inteira (o painel sempre envia a lista completa)."""
+    """Substitui a régua inteira (o painel sempre envia a lista completa).
+    Sem `scope` no corpo, grava em "Todos os dias", como nas versões anteriores."""
     body = await request.json()
+    scope = _check_scope(body.get("scope"))
     with db() as con:
-        pl = {r["id"] for r in con.execute("SELECT id FROM playlists")}
-        it = {r["id"] for r in con.execute("SELECT id FROM items")}
-        blocks = [_clean_block(b, pl, it) for b in body.get("blocks", [])]
-        con.execute("DELETE FROM schedule")
-        now = int(time.time())
-        con.executemany("INSERT INTO schedule VALUES (?,?,?,?,?,?)",
-                        [(b["id"], b["kind"], b["ref_id"], b["start_min"], b["end_min"], now) for b in blocks])
+        blocks = _write_ruler(con, scope, body.get("blocks", []))
         bump_version(con)
         con.commit()
-    return {"blocks": blocks}
+    return {"scope": scope, "blocks": blocks}
+
+
+@app.post("/api/schedule/copy", dependencies=[Depends(require_auth)])
+async def copy_schedule(request: Request):
+    """Copia uma régua para outras (ex.: "Repetir nos dias úteis": to = wd:1..wd:5).
+    As réguas de destino são substituídas e passam a existir como réguas próprias.
+    {"from": "all", "to": ["wd:1", ...]}  ou  {"from": ..., "to": [...], "blocks": [...]}
+    para criar a partir de uma lista pronta (ex.: "a playlist X o dia todo")."""
+    body = await request.json()
+    targets = [_check_scope(t) for t in body.get("to", [])]
+    if not targets:
+        raise HTTPException(400, "Escolha pelo menos um dia de destino")
+    with db() as con:
+        if "blocks" in body:
+            src = body["blocks"]
+        else:
+            frm = _check_scope(body.get("from"))
+            custom = _custom_scopes(con)
+            if frm != "all" and frm not in custom:   # copiar de régua herdada = copiar da que vale
+                frm = ruler_for_day(_date.fromisoformat(frm[5:]), custom) if frm.startswith("date:") else "all"
+            src = _blocks_of(con, frm)
+        for t in targets:
+            # id novo em cada cópia: o id de um bloco identifica o "slot" no ar
+            _write_ruler(con, t, [dict(b, id=None) for b in src])
+        bump_version(con)
+        con.commit()
+    return {"ok": True, "to": targets, "blocks": len(src)}
+
+
+@app.delete("/api/schedule", dependencies=[Depends(require_auth)])
+def delete_ruler(scope: str):
+    """Apaga uma régua própria: o dia volta a seguir o nível de cima (dia da semana ou Todos os dias)."""
+    scope = _check_scope(scope)
+    if scope == "all":
+        raise HTTPException(400, "A régua Todos os dias não pode ser removida (só esvaziada)")
+    with db() as con:
+        con.execute("DELETE FROM schedule WHERE scope=?", (scope,))
+        con.execute("DELETE FROM rulers WHERE scope=?", (scope,))
+        bump_version(con)
+        con.commit()
+    return {"ok": True}
+
+
+@app.get("/api/calendar")
+def calendar_month(month: str | None = None):
+    """Panorama de um mês (?month=AAAA-MM): para cada dia, qual régua vale (e por quê),
+    as playlists e itens agendados nela e o feriado nacional, se houver."""
+    try:
+        first = _date.fromisoformat((month or _date.today().strftime("%Y-%m")) + "-01")
+    except ValueError:
+        raise HTTPException(400, "Mês inválido (use AAAA-MM)")
+    nxt = (first.replace(day=28) + _timedelta(days=4)).replace(day=1)
+    hol = {}
+    try:
+        hol = {h["date"]: h["name"] for h in holidays(first.year)}
+    except Exception:
+        pass
+    entries, _ = parse_curio(curio_text())
+    with db() as con:
+        custom = _custom_scopes(con)
+        notices = [item_dict(r) for r in con.execute(
+            "SELECT * FROM items WHERE playlist_id=? ORDER BY created_at", (NOTICE_PLAYLIST,))]
+        pl_names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM playlists")}
+        it_names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM items")}
+        cache: dict[str, dict] = {}
+
+        def summary(scope: str) -> dict:
+            if scope not in cache:
+                bs = _blocks_of(con, scope)
+                pls, its = [], []
+                for b in bs:
+                    if b["kind"] == "playlist" and b["ref_id"] not in [p["id"] for p in pls]:
+                        pls.append({"id": b["ref_id"], "name": pl_names.get(b["ref_id"], "?")})
+                    if b["kind"] == "item" and b["ref_id"] not in [i["id"] for i in its]:
+                        its.append({"id": b["ref_id"], "name": it_names.get(b["ref_id"], "?")})
+                cache[scope] = {"playlists": pls, "items": its, "blocks": bs}
+            return cache[scope]
+
+        days, d = [], first
+        while d < nxt:
+            sc = ruler_for_day(d, custom)
+            days.append({"date": d.isoformat(), "weekday": d.isoweekday(), "scope": sc,
+                         "level": "date" if sc.startswith("date:") else "weekday" if sc.startswith("wd:") else "all",
+                         "label": scope_label(sc), "holiday": hol.get(d.isoformat()),
+                         "has_weekday_ruler": f"wd:{d.isoweekday()}" in custom,
+                         # datas comemorativas da lista curada e avisos por data que aparecem no dia
+                         **_day_dates(entries, d, hol.get(d.isoformat())),
+                         "notices": [{"id": n["id"], "name": n["name"], "type": n["type"], "active": n["active"],
+                                      "event": (occ := notice_occurrence(n["config"], d)).isoformat(),
+                                      "days_left": (occ - d).days}
+                                     for n in notices if notice_occurrence(n["config"], d)],
+                         **summary(sc)})
+            d += _timedelta(days=1)
+    return {"month": first.strftime("%Y-%m"), "today": _date.today().isoformat(),
+            "default_name": pl_names.get(DEFAULT_PLAYLIST, "Playlist padrão"), "days": days}
+
+
+def _day_dates(entries: list[dict], d: _date, holiday: str | None) -> dict:
+    """Datas da lista curada no dia. A que for o próprio feriado (mesmo nome, ex.: "Natal")
+    não se repete: o texto dela vira o texto do feriado (holiday_text)."""
+    on = [e for e in entries if _curio_matches(e["rule"], d)]
+    same = [e for e in on if holiday and _stems(e["title"]) & _stems(holiday)]
+    return {"dates": [{"title": e["title"], "text": e["text"]} for e in on if e not in same],
+            "holiday_text": same[0]["text"] if same else None}
 
 
 def _pick_block(blocks: list[dict], kind: str, now_min: int) -> dict | None:
@@ -418,37 +720,45 @@ def _pick_block(blocks: list[dict], kind: str, now_min: int) -> dict | None:
 
 
 def resolve_now(con: sqlite3.Connection, now: datetime | None = None) -> dict:
-    """Decide o que a TV deve exibir agora, aplicando a regra de prioridade acima.
+    """Decide o que a TV deve exibir agora: escolhe a régua do dia (ruler_for_day) e aplica
+    a regra de prioridade dentro dela (veja o comentário no topo desta seção).
 
-    `slot` identifica a decisão: quando muda (ex.: deu 12:00 e entrou outro bloco),
-    o player interrompe o item atual e troca de conteúdo.
+    `slot` identifica a decisão: quando muda (ex.: deu 12:00 e entrou outro bloco, ou virou
+    o dia e a régua é outra), o player interrompe o item atual e troca de conteúdo.
     """
     now = now or datetime.now()
     m = now.hour * 60 + now.minute
-    blocks = [dict(r) for r in con.execute("SELECT * FROM schedule")]
+    scope = ruler_for_day(now.date(), _custom_scopes(con))
+    blocks = _blocks_of(con, scope)
     names = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM playlists")}
+    ruler = {"scope": scope, "label": scope_label(scope)}
+
+    notices = notices_now(con, now)
 
     def items_of(pid: str) -> list[dict]:
         rows = con.execute("SELECT * FROM items WHERE playlist_id=? AND active=1 ORDER BY ord, created_at", (pid,))
-        return [item_dict(r) for r in rows]
+        # Avisos por data do dia entram no fim da rotação (aparecem uma vez por volta da playlist)
+        return [item_dict(r) for r in rows] + notices
 
     overlay = _pick_block(blocks, "item", m)
     if overlay:
         row = con.execute("SELECT * FROM items WHERE id=? AND active=1", (overlay["ref_id"],)).fetchone()
         if row:
-            return {"slot": f"item:{overlay['id']}", "items": [item_dict(row)],
+            # Avisos por data também entram durante o item avulso: muita programação é feita só de
+            # itens avulsos (ex.: Clima 10h–14h), e sem isso o aviso não apareceria no expediente.
+            return {"slot": f"item:{overlay['id']}", "items": [item_dict(row)] + notices, "ruler": ruler,
                     "source": {"kind": "item", "name": row["name"], "until": _hhmm(overlay["end_min"])}}
 
     base = _pick_block(blocks, "playlist", m)
     if base:
         its = items_of(base["ref_id"])
-        if its:
-            return {"slot": f"playlist:{base['id']}", "items": its,
+        if len(its) > len(notices):   # playlist só com avisos = playlist vazia → cai na padrão
+            return {"slot": f"playlist:{base['id']}", "items": its, "ruler": ruler,
                     "source": {"kind": "playlist", "name": names.get(base["ref_id"], "Playlist"),
                                "until": _hhmm(base["end_min"])}}
 
     upcoming = [b["start_min"] for b in blocks if b["start_min"] > m]
-    return {"slot": "default", "items": items_of(DEFAULT_PLAYLIST),
+    return {"slot": "default", "items": items_of(DEFAULT_PLAYLIST), "ruler": ruler,
             "source": {"kind": "default", "name": names.get(DEFAULT_PLAYLIST, "Playlist padrão"),
                        "until": _hhmm(min(upcoming)) if upcoming else None}}
 
@@ -460,6 +770,9 @@ def current_state() -> dict:
         ver = con.execute("SELECT val FROM version WHERE id=1").fetchone()
     state["version"] = ver["val"] if ver else 0
     state["server_time"] = datetime.now().strftime("%H:%M")
+    # Avisos por data intercalados agora: entram na assinatura do WebSocket para o player
+    # receber a lista nova quando um aviso começa ou termina (ex.: início do horário de serviço)
+    state["notices"] = [i["id"] for i in state["items"] if i.get("playlist_id") == NOTICE_PLAYLIST]
     # Curiosidades: quantos cartões há hoje (o player pula o item "today" se for 0) e as
     # regras das curiosidades automáticas, que o player intercala na playlist.
     try:
@@ -492,7 +805,8 @@ _push_task: asyncio.Task | None = None
 def _signature(state: dict) -> tuple:
     # "today" entra para o player saber na virada do dia (outras curiosidades) e quando as
     # curiosidades automáticas mudam em Configurações (que não alteram a versão).
-    return state.get("version"), state.get("slot"), json.dumps(state.get("today"), sort_keys=True)
+    return (state.get("version"), state.get("slot"), json.dumps(state.get("today"), sort_keys=True),
+            tuple(state.get("notices") or ()))
 
 
 async def _send(ws: WebSocket, text: str) -> None:
@@ -1026,6 +1340,107 @@ def today_auto_settings() -> dict:
             "duration": _num(s.get("today_duration"), 15, 5, 120)}
 
 
+# ─── Avisos por data (0.11.0) ─────────────────────────────────────────────────
+#
+# Um aviso é um item comum (mensagem, imagem, contador ou "Hoje é dia") guardado na playlist
+# reservada NOTICE_PLAYLIST ("Avisos por data", que não aparece nas listas do painel), com
+#   config.notice = {"date": "AAAA-MM-DD",   dia do evento
+#                    "days_before": 0,       começa a aparecer N dias antes (contagem regressiva)
+#                    "yearly": false,        repete todo ano
+#                    "anchor": {"holiday": "Carnaval"} | {"curio": "Dia das Mães"} | {},
+#                    "hours": "all" | "work"}   o dia todo ou só no horário de serviço
+#
+# Na TV, o aviso é INTERCALADO: entra no fim da rotação do que estiver no ar (resolve_now),
+# sem mexer na programação do dia. Vale também durante um item avulso agendado: ele passa a
+# alternar com os avisos do dia (ex.: Clima, Aviso, Clima, Aviso...).
+# Repetir todo ano: com "anchor", a data acompanha o feriado ou a data móvel da lista
+# (Carnaval, Páscoa, Dia das Mães...); sem ela, repete o mesmo DD/MM.
+
+NOTICE_PLAYLIST = "avisos"
+NOTICE_TYPES = {"message", "image", "countdown", "today"}
+
+
+def _curio_day(title: str, year: int) -> _date | None:
+    """Dia do ano `year` em que cai a data da lista curada com esse título (datas móveis)."""
+    entries, _ = parse_curio(curio_text())
+    rules = [e["rule"] for e in entries if e["title"].lower() == title.lower()]
+    if not rules:
+        return None
+    d = _date(year, 1, 1)
+    while d.year == year:
+        if any(_curio_matches(r, d) for r in rules):
+            return d
+        d += _timedelta(days=1)
+    return None
+
+
+def notice_date(n: dict, year: int) -> _date | None:
+    """Dia do evento do aviso no ano `year` (None se o aviso não acontece nesse ano)."""
+    try:
+        base = _date.fromisoformat(str(n.get("date", "")))
+    except ValueError:
+        return None
+    if not n.get("yearly"):
+        return base if base.year == year else None
+    a = n.get("anchor") or {}
+    if a.get("holiday"):
+        # Feriado de vários dias com o mesmo nome (Carnaval segunda e terça): segue o mesmo dia
+        # (o 1º ou o 2º) em que o aviso foi criado.
+        same = lambda y: sorted(h["date"] for h in holidays(y) if h["name"] == a["holiday"])
+        orig, hits = same(base.year), same(year)
+        if hits:
+            k = orig.index(base.isoformat()) if base.isoformat() in orig else 0
+            return _date.fromisoformat(hits[min(k, len(hits) - 1)])
+    if a.get("curio"):
+        hit = _curio_day(a["curio"], year)
+        if hit:
+            return hit
+    try:
+        return base.replace(year=year)
+    except ValueError:            # 29/02 em ano que não é bissexto
+        return base.replace(year=year, day=28)
+
+
+def notice_occurrence(cfg: dict, day: _date) -> _date | None:
+    """Se o aviso deve aparecer no dia `day`, devolve o dia do evento correspondente."""
+    n = cfg.get("notice") or {}
+    before = _num(n.get("days_before"), 0, 0, 60)
+    for y in (day.year, day.year + 1):      # +1: contagem de 28/12 para um evento em janeiro
+        d = notice_date(n, y)
+        if d and d - _timedelta(days=before) <= day <= d:
+            return d
+    return None
+
+
+def notices_now(con: sqlite3.Connection, now: datetime) -> list[dict]:
+    """Avisos que a TV intercala agora (dia certo e, se for o caso, horário de serviço)."""
+    rows = con.execute("SELECT * FROM items WHERE playlist_id=? AND active=1 ORDER BY ord, created_at",
+                       (NOTICE_PLAYLIST,)).fetchall()
+    if not rows:
+        return []
+    hhmm, work = now.strftime("%H:%M"), None
+    out = []
+    for r in rows:
+        it = item_dict(r)
+        if not notice_occurrence(it["config"], now.date()):
+            continue
+        if (it["config"].get("notice") or {}).get("hours") == "work":
+            work = work or today_auto_settings()
+            if not work["start"] <= hhmm < work["end"]:
+                continue
+        out.append(it)
+    return out
+
+
+@app.get("/api/notices")
+def list_notices():
+    """Todos os avisos cadastrados (o calendário mostra os de cada dia em /api/calendar)."""
+    with db() as con:
+        rows = [item_dict(r) for r in con.execute(
+            "SELECT * FROM items WHERE playlist_id=? ORDER BY created_at", (NOTICE_PLAYLIST,))]
+    return {"notices": rows}
+
+
 @app.get("/api/today")
 def api_today(d: str | None = None):
     from datetime import date
@@ -1521,6 +1936,9 @@ def view_countdown(item_id: str):
     Com config.hide_after, o player deixa de exibir o item depois do fim (countdown_visible()).
     """
     cfg = _item_config(item_id)
+    # Aviso por data que repete todo ano: o contador aponta para o evento deste ano
+    if cfg.get("notice") and (occ := notice_occurrence(cfg, _date.today())):
+        cfg["target"] = occ.isoformat() + (str(cfg.get("target", ""))[10:] or "T00:00")
     title = html.escape(cfg.get("title", ""))
     end_text = html.escape(cfg.get("end_text", "") or "Chegou a hora!")
     bg = html.escape(cfg.get("bg_color", "#0a0a1a"))
@@ -1686,6 +2104,12 @@ def view_news(item_id: str):
     accent = _css_color(cfg.get("accent"), "#38bdf8")
     per = _num(cfg.get("per_headline"), 9, 4, 60)
     show_img = "true" if cfg.get("show_images", True) else "false"
+    # Logo Alava no cabeçalho (0.11.0; config.show_logo, ligado por padrão).
+    # Usa assets/watermark.png (versão branca, fundo transparente): é a de melhor contraste
+    # no fundo azul-escuro desta tela. As outras (minimalista azul-marinho e "fundo branco")
+    # sumiriam no fundo escuro. Mesmo tamanho do logo das telas de clima e trânsito.
+    logo = ('<img class="logo" src="/assets/watermark.png" alt="Alava"><span class="sep"></span>'
+            if cfg.get("show_logo", True) else "")
     return HTMLResponse(f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -1693,6 +2117,12 @@ def view_news(item_id: str):
 html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5f9;font-family:'Segoe UI',system-ui,sans-serif}}
 .top{{position:fixed;top:0;left:0;right:0;height:11vh;display:flex;align-items:center;justify-content:space-between;padding:0 4vw}}
 .top h1{{font-size:3.4vh;font-weight:700;letter-spacing:.32em;text-transform:uppercase;color:{accent}}}
+/* Logo Alava: à esquerda do título, separada por um traço fino na cor de destaque.
+   Altura igual à do logo do clima/trânsito (4,2% da tela, mínimo 26 px) e leve transparência
+   para não competir com a manchete. Fica no cabeçalho, fora da área do cartão. */
+.top .brand{{display:flex;align-items:center;gap:1.6vw}}
+.top .logo{{height:clamp(26px,4.2vh,72px);width:auto;opacity:.9;display:block}}
+.top .sep{{width:2px;height:4.4vh;border-radius:2px;background:{accent};opacity:.55}}
 .top .clock{{font-size:4.2vh;font-weight:300;font-variant-numeric:tabular-nums;opacity:.85}}
 .card{{position:fixed;top:13vh;bottom:12vh;left:4vw;right:4vw;display:grid;grid-template-columns:46% 1fr;gap:4vw;align-items:center;
   transition:opacity .6s ease}}
@@ -1711,7 +2141,7 @@ html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5
 .empty{{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:4vh;color:#94a3b8;text-align:center}}
 </style></head>
 <body>
-<div class="top"><h1>{title}</h1><div class="clock" id="clock"></div></div>
+<div class="top"><div class="brand">{logo}<h1>{title}</h1></div><div class="clock" id="clock"></div></div>
 <div class="card" id="card"><div class="pic" id="pic"></div>
   <div><div class="meta" id="meta"></div><div class="headline" id="headline"></div><div class="summary" id="summary"></div></div></div>
 <div class="bottom"><span id="count"></span><div class="bar"><i id="bar"></i></div></div>

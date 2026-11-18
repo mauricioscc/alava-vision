@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.10.0
+Alava Vision — Player (player.py) · versão 0.11.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -21,6 +21,12 @@ COMO O PLAYER FICA SABENDO DAS MUDANÇAS (0.8.0)
     • Se a conexão cair (servidor reiniciando, servidor antigo sem WebSocket), volta a consultar
       GET /api/player/state a cada 5 s e tenta reconectar sozinho (1 s, 2 s, 4 s… até 30 s).
     • No terminal: "Aviso instantâneo ligado" / "Aviso instantâneo caiu".
+    • O que acontece quando chega uma mudança (0.11.0, after_change()):
+        - a programação trocou de bloco (outra playlist/item avulso/régua) → recomeça do 1º item;
+        - salvaram algo no painel, mas o item na tela não mudou → ele continua, sem interromper;
+        - o item na tela foi editado → aparece de novo, já com a mudança, e a sequência segue dali;
+        - o item na tela foi removido ou desativado → passa para o próximo.
+      Antes da 0.11.0, qualquer salvamento no painel voltava a playlist para o 1º item.
 
 COMPORTAMENTO DO MONITOR
     • Ao abrir, o Chrome é posicionado no monitor escolhido e entra em tela cheia (kiosk).
@@ -35,6 +41,7 @@ LOGO DA ALAVA
 
 COMO REVERTER
     Com Git:  git log --oneline  e  git checkout <commit> -- player.py
+    Para a 0.10.0 (antes de after_change):  git checkout 8c60d7f -- player.py
     Sem Git:  backup_v0.2.0_20261117/player.py (versão 0.2.0)
 
 MAPA DO CÓDIGO
@@ -48,6 +55,8 @@ MAPA DO CÓDIGO
     Vídeo sem repetição ............. plays_once(), VIDEO_ENDED_JS  → avança quando o vídeo acaba
     Curiosidades ("Hoje é dia") ..... today_count() (pula o item em dia sem nada),
                                       curiosity_due() → intercala /view/today (Configurações)
+    Itens que podem ir para a tela .. playable()
+    Mudança durante a exibição ...... after_change(), _item_key()  (não recomeça a playlist a cada salvamento)
     URL de cada tipo de item ........ item_url()
     Loop de exibição ................ run()
     Parâmetros de linha de comando .. main()
@@ -66,7 +75,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -265,6 +274,47 @@ def curiosity_due(state: dict, last_shown: float) -> dict | None:
             "duration": int(auto.get("duration", 15)), "config": {}}
 
 
+def playable(state: dict) -> list[dict]:
+    """Itens da rotação atual que podem ir para a tela agora."""
+    return [x for x in state.get("items", [])
+            if x.get("active") and time_in_window(x.get("config", {})) and countdown_visible(x)
+            and (x.get("type") != "today" or today_count(state) > 0)]
+
+
+def _item_key(item: dict) -> str:
+    """O que muda a tela de um item (nome e ordem não contam)."""
+    return json.dumps([item.get("type"), item.get("config"), item.get("duration")], sort_keys=True)
+
+
+def after_change(item: dict, old: dict, new: dict) -> tuple[str, int | None]:
+    """O que fazer com o item que está na tela quando chega um estado novo (0.11.0).
+
+    Antes, qualquer salvamento no painel voltava a playlist para o 1º item, e quem estava
+    configurando o painel via o primeiro item (ex.: Notícias) recomeçar várias vezes.
+    Agora só uma troca de bloco da programação (slot) recomeça do início:
+      "restart", 0     → outro bloco/régua entrou no ar: começa a playlist nova do início;
+      "keep",  idx     → o item na tela não mudou: continua sem interromper; idx = próximo da fila;
+      "reload", idx    → o item na tela foi editado: mostra de novo já com a mudança (idx = ele);
+      "skip",  idx     → foi removido/desativado: vai para o próximo que ainda existe.
+    idx None = manter o índice atual.
+    """
+    if new.get("slot") != old.get("slot"):
+        return "restart", 0
+    if item.get("id") == "auto":                     # curiosidade intercalada: não está na lista
+        return "keep", None
+    new_items, old_items = playable(new), playable(old)
+    new_ids = [x["id"] for x in new_items]
+    if item["id"] in new_ids:
+        pos = new_ids.index(item["id"])
+        if _item_key(new_items[pos]) == _item_key(item):
+            return "keep", pos + 1
+        return "reload", pos
+    old_ids = [x["id"] for x in old_items]
+    after = old_ids[old_ids.index(item["id"]) + 1:] if item["id"] in old_ids else []
+    nxt = next((new_ids.index(i) for i in after if i in new_ids), 0)
+    return "skip", nxt
+
+
 def item_url(item: dict, server: str) -> str:
     t = item["type"]
     if t == "url":
@@ -357,9 +407,7 @@ def run(args, push: PushChannel):
                     except Exception as e:
                         log("Sem API, usando última programação:", e)
 
-                items = [x for x in state.get("items", [])
-                         if x.get("active") and time_in_window(x.get("config", {})) and countdown_visible(x)
-                         and (x.get("type") != "today" or today_count(state) > 0)]
+                items = playable(state)
 
                 if not items:
                     page.set_content(IDLE_HTML)
@@ -425,8 +473,15 @@ def run(args, push: PushChannel):
                         except Exception:
                             continue
                     if signature(fresh) != shown:
-                        log("Programação mudou — trocando conteúdo")
-                        idx = 0
+                        action, new_idx = after_change(item, state, fresh)
+                        state, shown = fresh, signature(fresh)
+                        if new_idx is not None:
+                            idx = new_idx
+                        if action == "keep":
+                            continue                     # salvaram outra coisa: segue exibindo este item
+                        log({"restart": "Programação mudou — trocando conteúdo",
+                             "reload": "Item editado no painel — mostrando de novo",
+                             "skip": "Item removido/desativado — próximo"}[action])
                         current_url = None
                         deadline = 0
         finally:
