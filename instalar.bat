@@ -52,7 +52,7 @@ call "%~dp0startup.bat" criar
 echo.
 choice /c SN /m "Abrir o Alava Vision agora"
 if errorlevel 2 goto fim
-start "Alava Vision" /min "%~dp0iniciar_alava_vision.bat"
+start "Alava Vision" /min cmd /c ""%~dp0iniciar_alava_vision.bat""
 
 :fim
 echo.

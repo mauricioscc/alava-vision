@@ -1,15 +1,34 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.6.4** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.7.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
-Primeira vez: `pip install -r requirements.txt` e copie `.env.example` para `.env` (defina a senha).
+### No computador da TV
 
-**Na máquina da TV (um clique):** `iniciar_alava_vision.bat` sobe o servidor e abre o player em tela cheia no
-monitor da TV. Para iniciar junto com o Windows, coloque um atalho desse arquivo em `shell:startup`
-(Win+R → `shell:startup`).
+Pré-requisitos: **Python 3.10+** (marque "Add Python to PATH" na instalação), **Git** e **Google Chrome**.
+
+1. Baixe o projeto (o repositório é privado: o Git pede o login do GitHub na primeira vez):
+   ```
+   git clone https://github.com/mauricioscc/alava-vision.git "C:\Alava Vision"
+   ```
+2. Dê dois cliques em **`instalar.bat`**. Ele confere Python, Git e Chrome, instala as bibliotecas,
+   pergunta a senha do painel, a porta (avisa se já estiver em uso) e o monitor da TV, e oferece
+   iniciar com o Windows.
+
+| Arquivo | Para quê |
+|---|---|
+| `instalar.bat` | Instalação (uma vez). Pode ser rodado de novo: mantém o `.env` e os dados. |
+| `iniciar_alava_vision.bat` | Abre o servidor e, quando ele responde, o player na TV. |
+| `atualizar.bat` | Fecha o sistema, baixa a versão nova do GitHub (`git pull`), atualiza as bibliotecas, mostra as novidades e reabre. Não mexe no `.env` nem em `data/`. |
+| `startup.bat` | Liga ou desliga o início automático com o Windows (atalho em `shell:startup` para o `iniciar_alava_vision.bat`). |
+
+O início automático acontece quando o usuário entra no Windows. Para a TV voltar sozinha depois de uma queda
+de energia, o PC precisa entrar no Windows sem senha (login automático) e ligar sozinho quando a energia volta
+(opção da BIOS).
+
+Para mudar só a senha, a porta ou o monitor depois: `python ferramentas\configurar.py`.
 
 Manualmente:
 
@@ -75,6 +94,10 @@ Alava Vision/
 ├── player.py              Chrome em kiosk via CDP; segue /api/player/state
 ├── monitors.py            Detecta os monitores do Windows e mantém a janela do player na TV
 ├── iniciar_alava_vision.bat  Servidor + player com um clique
+├── instalar.bat           Instalação no PC da TV (bibliotecas, .env, início com o Windows)
+├── atualizar.bat          Fecha, baixa a versão nova (git pull) e reabre
+├── startup.bat            Liga/desliga o início automático com o Windows
+├── ferramentas/           configurar.py (.env interativo) e parar_alava_vision.ps1 (usado pelo atualizar)
 ├── static/index.html      Painel administrativo
 ├── static/weather.html    Tela de clima (relógio, 7 dias, céu animado, alertas INMET); abre já com a previsão
 ├── static/fonts/          Fonte Inter local usada na TV

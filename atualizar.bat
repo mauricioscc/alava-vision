@@ -65,7 +65,7 @@ pause
 :abrir
 echo.
 echo Abrindo o Alava Vision...
-start "Alava Vision" /min "%DIR%\iniciar_alava_vision.bat"
+start "Alava Vision" /min cmd /c ""%DIR%\iniciar_alava_vision.bat""
 popd
 timeout /t 5 >nul
 exit

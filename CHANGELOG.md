@@ -7,6 +7,18 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.7.0] — 2026-11-18
+#### Adicionado
+- **`instalar.bat`**: instalação no computador da TV com dois cliques. Confere Python (3.10+), Git e Chrome, instala as bibliotecas, cria o `.env` perguntando senha, porta e monitor da TV e oferece iniciar com o Windows. Pode ser rodado de novo sem perder o `.env` nem os dados.
+- **`atualizar.bat`**: fecha servidor, player e o Chrome da TV, baixa a versão nova (`git pull`), atualiza as bibliotecas, mostra a versão e as novidades e reabre o sistema. Roda a partir de uma cópia em `%TEMP%`, porque o `git pull` pode trocar o próprio arquivo enquanto ele roda.
+- **`startup.bat`**: cria ou remove o atalho na pasta Inicializar do Windows. O atalho abre o `iniciar_alava_vision.bat` minimizado, que sobe o servidor (playlists e programação) e depois o player.
+- `ferramentas/configurar.py`: perguntas do `.env`. Recusa senha vazia, a do exemplo ou com espaço/#/aspas; avisa se a porta estiver em uso e sugere uma livre; lista os monitores na numeração do player.
+- `ferramentas/parar_alava_vision.ps1`: fecha só os processos desta instalação. `-Simular` lista o que seria fechado, sem fechar.
+- `.gitattributes`: `.bat` e `.ps1` sempre com quebra de linha do Windows, qualquer que seja a configuração do Git do computador.
+
+#### Alterado
+- `iniciar_*.bat` passam o caminho da pasta na linha de comando do servidor e do player, para o `atualizar.bat` reconhecer exatamente os processos do Alava Vision.
+
 ### [0.6.4] — 2026-11-18
 #### Alterado
 - **A porta do servidor agora vem só do `.env` (`PORT`).** `iniciar_alava_vision.bat`, `iniciar_servidor.bat` e `player.py` usavam 8080 fixo e ignoravam o `PORT` do `.env`. Para usar outra porta (ex.: no computador da TV, onde a 8080 já está ocupada), basta mudar `PORT=` no `.env`. Sem `PORT` no `.env`, continua 8080.
