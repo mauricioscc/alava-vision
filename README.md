@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.6.1** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.6.2** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -102,5 +102,5 @@ Ficam fora do Git: `.env` (senha), `data/` (banco, uploads e login do Chrome da 
 - **Prévia de sites**: alguns sites (ex.: sistemas com login) não permitem ser exibidos dentro de outra página.
   A prévia mostra um aviso nesses casos; na TV eles abrem normalmente.
 - **Alertas do INMET**: o endereço usado (`apiprevmet3.inmet.gov.br/avisos/ativos`) não é documentado oficialmente.
-  Se sair do ar, a tela de clima continua funcionando, só sem os alertas.
+  Se sair do ar, a tela de clima continua funcionando e mostra o aviso "INMET indisponível" no lugar dos alertas.
 - A programação é diária (igual todos os dias) e usa o relógio do computador do servidor.
