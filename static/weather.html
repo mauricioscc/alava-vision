@@ -1,14 +1,16 @@
 <!doctype html>
 <!--
-  Alava Vision — Tela de clima (static/weather.html) · versão 0.6.2
+  Alava Vision — Tela de clima (static/weather.html) · versão 0.6.3
 
   COMO ABRIR / TESTAR (servidor rodando na porta 8080)
     http://localhost:8080/view/weather                         previsão real
     http://localhost:8080/view/weather?demo=storm&wind=45&alert=orange
+    http://localhost:8080/view/weather?inmet=off                 previsão real com o INMET simulado fora do ar
         demo  = clear | partly | overcast | fog | drizzle | rain | heavy | storm | hail | snow
         wind  = vento em km/h (acelera nuvens, inclina a chuva, mostra rajadas acima de 20)
         day   = 1 dia | 0 noite
         alert = yellow | orange | red (tag de teste no canto inferior direito)
+        inmet = off  simula o INMET fora do ar (aviso "INMET indisponível"); funciona com ou sem demo
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/weather.html   (commits: git log --oneline)
@@ -240,14 +242,17 @@ function fakeData() {
 }
 
 function applyDemo() {
-  if (!params.has('demo')) return;
-  if (!W) W = fakeData();
-  const c = W.current, code = DEMO_CODES[params.get('demo')];
-  if (code !== undefined) c.code = code;
-  if (params.has('wind')) { c.wind = +params.get('wind'); c.gust = c.wind * 1.6; }
-  if (params.has('day')) c.is_day = params.get('day') === '1' ? 1 : 0;
-  const sev = params.get('alert');
-  if (sev) W.alerts = [{title: 'Tempestade (teste)', severity: sev, detail: 'Alerta de demonstração', end: null, source: 'Demo'}];
+  if (params.has('demo')) {
+    if (!W) W = fakeData();
+    const c = W.current, code = DEMO_CODES[params.get('demo')];
+    if (code !== undefined) c.code = code;
+    if (params.has('wind')) { c.wind = +params.get('wind'); c.gust = c.wind * 1.6; }
+    if (params.has('day')) c.is_day = params.get('day') === '1' ? 1 : 0;
+    const sev = params.get('alert');
+    if (sev) W.alerts = [{title: 'Tempestade (teste)', severity: sev, detail: 'Alerta de demonstração', end: null, source: 'Demo'}];
+  }
+  // ?inmet=off simula o INMET fora do ar (sem alertas + aviso cinza). Funciona com ou sem ?demo.
+  if (W && params.get('inmet') === 'off') { W.alerts = []; W.inmet_status = 'unavailable'; }
 }
 
 async function load() {

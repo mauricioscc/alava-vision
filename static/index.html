@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.6.1
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.6.3
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -448,6 +448,8 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
         <a class="btn btn-ghost btn-sm" id="lnk-dusk" href="/view/weather" target="_blank" title="10 min após o pôr do sol de hoje">Crepúsculo</a>
         <a class="btn btn-ghost btn-sm" id="lnk-dawn" href="/view/weather" target="_blank" title="10 min antes do nascer do sol de hoje">Amanhecer</a>
         <a class="btn btn-ghost btn-sm" href="/view/weather?demo=heavy&wind=30&alert=red" target="_blank">Chuva forte + perigo</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?inmet=off" target="_blank" title="Previsão real, simulando o site do INMET fora do ar">INMET indisponível</a>
+        <a class="btn btn-ghost btn-sm" href="/view/weather?demo=storm&wind=45&inmet=off" target="_blank" title="Tempestade com o INMET fora do ar: sem alertas, só o aviso cinza">Tempestade + INMET fora</a>
       </div>
     </div>
   </div>
