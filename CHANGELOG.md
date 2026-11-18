@@ -7,6 +7,14 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.6.2] — 2026-11-18
+#### Adicionado
+- **Aviso de INMET indisponível na tela de clima.** Quando o Instituto Nacional de Meteorologia está fora do ar ou inacessível, a tela exibe um card cinza discreto no painel de alertas com o texto "INMET indisponível — Alertas não carregados". Antes os alertas simplesmente sumiam sem nenhum indicativo.
+- O JSON de clima (`/api/weather`) agora inclui o campo `inmet_status`: `"ok"` (INMET respondeu), `"unavailable"` (exceção ao tentar acessar) ou `"disabled"` (código IBGE não configurado nas configurações).
+
+#### Corrigido
+- Número de versão no cabeçalho de `server.py` estava marcado como 0.6.0 em vez de 0.6.1.
+
 ### [0.6.1] — 2026-11-17
 #### Corrigido
 - **A tela de clima demorava a virar noite.** O dado de dia/noite do Open-Meteo vem em blocos de 15 minutos e o servidor guarda a previsão por até 9, então a noite chegava até ~25 minutos depois do pôr do sol. Agora a tela decide pelo relógio, comparando com o nascer e o pôr do sol de hoje, e confere a cada 30 segundos, trocando o céu, o ícone e o texto na hora certa.
