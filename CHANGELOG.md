@@ -120,19 +120,19 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## [Não lançado] — Próximos passos
 
-> Próxima fase: integrar AlavaVision e Kiosk Player em um único sistema distribuído.
+> Meta: transformar o Sistema Unificado num sistema distribuído, com vários players na rede.
+>
+> Já entregue no Sistema Unificado (0.1.0 a 0.7.0): backend FastAPI com REST API, painel web
+> com login (no lugar do app desktop Qt), player Chrome via CDP e conteúdo de vídeo.
 
 ### Planejado
-- Backend FastAPI com REST API e WebSocket
-- Admin SPA web (substitui o app desktop Qt)
-- Player unificado: Chrome via CDP para URLs + Qt para conteúdo local
-- Comunicação push via WebSocket (substitui polling de 5s)
-- Suporte a múltiplos players distribuídos em rede
-- Widget de Vídeo (MP4, WebM)
-- Widget de HTML local
-- Widget de Contador Regressivo
-- Autenticação e controle de permissões
-- Métricas em tempo real
+- **WebSocket**: o servidor avisa o player na hora em que algo muda, em vez de o player consultar a cada 5s (`player.py`)
+- **Vários players na rede**: cadastro de cada TV no painel, com playlist e programação próprias
+- **Usuários e permissões**: hoje existe uma senha única para o painel
+- **Widget de HTML local**: exibir páginas HTML salvas no projeto
+- **Widget de Contador Regressivo**
+- **Métricas em tempo real**: o que cada TV está exibindo e se está online
+- **Conteúdo local fora do Chrome** (avaliar): o player usa só o Chrome; a parte em Qt prevista para conteúdo local ainda não existe
 
 ---
 
