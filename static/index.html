@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.11.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.12.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,12 +9,15 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.11.0 (antes do botão de tema): git checkout 6efc5ba -- static/index.html
     Para a 0.10.0 (antes do calendário): git checkout 8c60d7f -- static/index.html server.py
     Para a 0.8.1 (antes dos widgets de HTML e contador): git checkout 3ac5a57 -- static/index.html
     Para a 0.2.0 (antes do Git): copie backup_v0.2.0_20261117/static/index.html por cima deste arquivo.
 
   MAPA DO CÓDIGO
-    Tokens de cor/tema ............. :root (CSS)
+    Tokens de cor/tema ............. :root (CSS); claro em @media prefers-color-scheme e :root[data-theme="light"]
+    Botão claro/escuro (0.12.0) .... #theme-btn (topo), THEMES, applyTheme(), cycleTheme(); script no <head>
+                                     aplica av_theme antes de desenhar (sem piscar)
     Barra lateral e abas ........... .sidebar, .nav-btn, showTab()
     "No ar agora" (topo) ........... #live-pill, refreshLive()
     Login .......................... #login-overlay, doLogin(), api()
@@ -71,10 +74,18 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Alava Vision</title>
 <link rel="icon" type="image/png" href="/assets/logo%20alava%20minimalista.png">
+<script>
+  // Tema (0.12.0): aplicado antes de desenhar a página, para não piscar no tema errado.
+  // av_theme = 'light' | 'dark'; sem valor = automático (segue o tema do Windows).
+  try { const t = localStorage.getItem('av_theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <style>
+/* TEMA (0.12.0): escuro é o padrão. O claro vale quando o Windows está no modo claro (automático)
+   ou quando o botão do topo escolhe "Claro" (data-theme="light" no <html>). "Escuro" força o escuro. */
 :root {
+  color-scheme: dark;
   --bg:      #0d0f14;
   --surface: #161920;
   --card:    #1c2030;
@@ -93,11 +104,20 @@
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
+    color-scheme: light;
     --bg: #f0f2f8; --surface: #fff; --card: #f7f8fc; --border: #dde1ee;
     --muted: #8b93ad; --text: #111827; --soft: #5b6476;
     --grid: rgba(15,23,42,.05); --grid-strong: rgba(15,23,42,.12);
   }
 }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f0f2f8; --surface: #fff; --card: #f7f8fc; --border: #dde1ee;
+  --muted: #8b93ad; --text: #111827; --soft: #5b6476;
+  --grid: rgba(15,23,42,.05); --grid-strong: rgba(15,23,42,.12);
+}
+/* Botão de tema no topo */
+.theme-btn{min-width:122px;justify-content:center}
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none!important}
 body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
@@ -487,13 +507,14 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('calendar')" id="nb-calendar"><span class="ic">▦</span> Calendário</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.11.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.12.0</div>
 </aside>
 
 <div class="main">
   <header class="topbar">
     <h1 id="page-title">Playlists</h1>
     <div class="top-actions">
+      <button class="btn btn-ghost btn-sm theme-btn" id="theme-btn" onclick="cycleTheme()"></button>
       <span class="live-pill" id="live-pill" title="O que a TV está exibindo agora"><span class="live-dot"></span><span>No ar:</span><b id="live-name">—</b><span id="live-until"></span></span>
       <button class="btn btn-primary" onclick="openAddModal()" id="add-btn">+ Adicionar item</button>
     </div>
@@ -2655,6 +2676,29 @@ async function resetCuriosities() {
   try { $('s-curio').value = (await api('POST', '/api/curiosities/reset')).text; status('Lista padrão restaurada'); }
   catch(e) { status('Erro: ' + e.message, 'err'); }
 }
+
+// ═══ TEMA CLARO / ESCURO (0.12.0) ═════════════════════════════════════════════
+// O botão do topo alterna Automático → Claro → Escuro. A escolha fica no navegador (av_theme),
+// e o script no <head> já aplica antes de a página aparecer. Só muda o painel: as telas da TV não mudam.
+const THEMES = [
+  {id: 'auto', icon: '🖥', label: 'Automático', tip: 'Segue o tema do Windows. Clique para usar o modo claro.'},
+  {id: 'light', icon: '☀', label: 'Claro', tip: 'Modo claro. Clique para usar o modo escuro.'},
+  {id: 'dark', icon: '🌙', label: 'Escuro', tip: 'Modo escuro. Clique para seguir o tema do Windows.'},
+];
+function currentTheme() { return store.get('av_theme') || 'auto'; }
+function applyTheme(id) {
+  if (id === 'auto') { delete document.documentElement.dataset.theme; store.del('av_theme'); }
+  else { document.documentElement.dataset.theme = id; store.set('av_theme', id); }
+  const t = THEMES.find(x => x.id === id);
+  $('theme-btn').textContent = `${t.icon} ${t.label}`;
+  $('theme-btn').title = t.tip;
+  $('theme-btn').setAttribute('aria-label', `Tema do painel: ${t.label}. ${t.tip}`);
+}
+function cycleTheme() {
+  const i = THEMES.findIndex(x => x.id === currentTheme());
+  applyTheme(THEMES[(i + 1) % THEMES.length].id);
+}
+applyTheme(currentTheme());
 
 // ═══ NAVEGAÇÃO E INICIALIZAÇÃO ════════════════════════════════════════════════
 const TITLES = {playlists: 'Playlists', schedule: 'Programação', calendar: 'Calendário', settings: 'Configurações'};

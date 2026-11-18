@@ -7,6 +7,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.12.0] — 2026-11-18
+#### Adicionado
+- **Botão de tema no topo do painel:** alterna entre 🖥 **Automático** (segue o tema do Windows, como antes), ☀ **Claro** e 🌙 **Escuro**.
+  - A escolha fica guardada no navegador de cada computador e já é aplicada antes de a página aparecer, sem piscar no tema errado.
+  - Os campos do navegador (data, hora, listas) acompanham o tema.
+  - Só muda o painel: as telas da TV e as prévias dela continuam iguais.
+
 ### [0.11.0] — 2026-11-18
 #### Adicionado
 - **Programação por dia da semana.** A aba Programação ganhou o seletor **Régua**: *Todos os dias*, *Seg* a *Dom* e uma data específica.

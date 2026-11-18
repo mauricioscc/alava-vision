@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.11.0
+Alava Vision — Servidor (server.py) · versão 0.12.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -29,6 +29,8 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.11.0 (antes do botão de tema claro/escuro, que só muda o painel):
+        git checkout 6efc5ba -- static/index.html
     Para a 0.10.0 (antes do calendário e das réguas por dia da semana):
         git checkout 8c60d7f -- server.py static/index.html
         A 0.10.0 lê só a régua "Todos os dias" (os blocos das outras réguas ficam no banco, ignorados).
@@ -124,7 +126,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 load_dotenv()
 

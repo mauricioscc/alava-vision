@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.11.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.12.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -89,6 +89,11 @@ pode ser desligado no item). Sites, imagens, vídeos e mensagens aparecem sem al
 - **📣 Avisos por data** (Calendário → clique no dia → *Adicionar aviso para este dia*): mensagem, imagem, contador ou "Hoje é dia", já preenchidos a partir do feriado ou da data comemorativa. Escolha quantos dias antes começa a aparecer, o horário (o dia todo ou só no expediente) e se repete todo ano. Datas móveis como Carnaval e Dia das Mães são acompanhadas sozinhas. O aviso é **intercalado** no que estiver no ar, inclusive durante um item avulso, sem mudar a programação.
 - **Contador regressivo:** título, data e hora do evento, cores e texto exibido quando a hora chega. Com *Tirar da TV depois que a hora chegar*, o item deixa de aparecer sozinho.
 - **HTML local:** envie um `.html` (página única) ou um `.zip` com a página e seus arquivos (CSS, imagens, scripts). A página inicial do `.zip` é o `index.html`. Cada envio fica em `data/html/<id>/`.
+
+### Tema do painel
+
+O botão no topo do painel alterna entre **Automático** (segue o tema do Windows), **Claro** e **Escuro**.
+A escolha fica salva no navegador. As telas da TV não mudam.
 
 ### Como a TV decide o que exibir
 
