@@ -116,6 +116,9 @@ Depois, **dentro da régua**:
 Dois blocos na mesma trilha no mesmo horário: vale o que começa mais tarde (o mais curto, se começarem juntos).
 Para conferir a decisão atual: `http://localhost:8080/api/player/state`.
 
+No topo da aba Programação, **Na TV agora** mostra o item na tela, quanto falta e o próximo. O botão
+**⏭ Pular item** passa a TV para o próximo item na hora.
+
 Salvar algo no painel não faz a TV recomeçar a playlist. O item na tela continua, e só aparece de novo se foi
 ele o editado. A playlist só recomeça do 1º item quando a programação troca de bloco.
 

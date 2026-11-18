@@ -65,6 +65,8 @@ MAPA DO CÓDIGO
                                       (repete todo ano seguindo feriado/data móvel), notice_occurrence(),
                                       notices_now() → intercalados no fim da playlist em resolve_now();
                                       GET /api/notices; contador anual em view_countdown()
+    Na TV agora / pular item ........ POST /api/player/now (o player informa, só localhost), GET /api/player/now,
+                                      POST /api/player/skip (_skip_seq → state["skip"] → WebSocket)
     O que está no ar agora .......... resolve_now() (escolhe a régua do dia), _pick_block(), current_state(),
                                       GET /api/player/state (campo "ruler" = régua em uso hoje)
     Aviso instantâneo (WebSocket) ... WS /ws/player, _players, _broadcast(), _push_watcher(),
@@ -772,6 +774,7 @@ def current_state() -> dict:
         ver = con.execute("SELECT val FROM version WHERE id=1").fetchone()
     state["version"] = ver["val"] if ver else 0
     state["server_time"] = datetime.now().strftime("%H:%M")
+    state["skip"] = _skip_seq   # botão "Pular item" do painel (o player compara com o anterior)
     # Avisos por data intercalados agora: entram na assinatura do WebSocket para o player
     # receber a lista nova quando um aviso começa ou termina (ex.: início do horário de serviço)
     state["notices"] = [i["id"] for i in state["items"] if i.get("playlist_id") == NOTICE_PLAYLIST]
@@ -788,6 +791,51 @@ def current_state() -> dict:
 @app.get("/api/player/state")
 def player_state():
     return current_state()
+
+
+# ─── Na TV agora / pular item (0.12.0) ────────────────────────────────────────
+#
+# O player avisa o que pôs na tela (POST /api/player/now, só do próprio computador) e o painel
+# mostra em "Na TV agora" (GET /api/player/now). O botão "Pular item" (POST /api/player/skip)
+# soma 1 em _skip_seq. Esse número vai no estado ("skip") e na assinatura do WebSocket, então
+# o player recebe na hora, encerra o item atual e passa para o próximo da fila.
+# Fica só na memória: reiniciar o servidor zera, o que é inofensivo.
+
+_now_playing: dict = {}
+_skip_seq = 0
+
+
+@app.post("/api/player/now")
+async def player_now_report(request: Request):
+    if not request.client or request.client.host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(403, "Só o player deste computador informa o que está na tela")
+    body = await request.json()
+    if not body.get("name"):
+        raise HTTPException(400, "Informe o item que está na tela")
+    _now_playing.clear()
+    _now_playing.update({k: body.get(k) for k in ("id", "name", "type", "duration", "source", "next", "skip_seq")})
+    _now_playing["started"] = time.time()
+    return {"ok": True}
+
+
+@app.get("/api/player/now")
+def player_now():
+    """O que o player disse que está na tela e há quantos segundos ("stale" se faz tempo demais)."""
+    if not _now_playing:
+        return {"playing": False}
+    elapsed = time.time() - _now_playing["started"]
+    dur = int(_now_playing.get("duration") or 0)
+    return {"playing": True, **_now_playing, "elapsed": round(elapsed, 1),
+            "remaining": max(0, round(dur - elapsed)),
+            # passou bem do tempo e o player não avisou o item seguinte: provavelmente está fechado
+            "stale": elapsed > dur + 90, "players": len(_players)}
+
+
+@app.post("/api/player/skip", dependencies=[Depends(require_auth)])
+def player_skip():
+    global _skip_seq
+    _skip_seq += 1
+    return {"ok": True, "skip": _skip_seq, "players": len(_players)}
 
 
 # ─── Aviso instantâneo para os players (WebSocket) ────────────────────────────
@@ -808,7 +856,7 @@ def _signature(state: dict) -> tuple:
     # "today" entra para o player saber na virada do dia (outras curiosidades) e quando as
     # curiosidades automáticas mudam em Configurações (que não alteram a versão).
     return (state.get("version"), state.get("slot"), json.dumps(state.get("today"), sort_keys=True),
-            tuple(state.get("notices") or ()))
+            tuple(state.get("notices") or ()), state.get("skip"))
 
 
 async def _send(ws: WebSocket, text: str) -> None:
@@ -854,7 +902,9 @@ async def _push_watcher() -> None:
 async def _notify_players(request: Request, call_next):
     """Depois que uma alteração no painel termina (já gravada no banco), acorda o vigia."""
     response = await call_next(request)
+    # /api/player/now é o próprio player avisando o que pôs na tela: não muda a programação
     if (request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/")
+            and request.url.path != "/api/player/now"
             and response.status_code < 400 and _state_changed is not None):
         _state_changed.set()
     return response

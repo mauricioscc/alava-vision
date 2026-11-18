@@ -13,6 +13,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
   - A escolha fica guardada no navegador de cada computador e já é aplicada antes de a página aparecer, sem piscar no tema errado.
   - Os campos do navegador (data, hora, listas) acompanham o tema.
   - Só muda o painel: as telas da TV e as prévias dela continuam iguais.
+- **Na TV agora + ⏭ Pular item** (topo da aba Programação):
+  - O cartão mostra o item que está na tela, a playlist, quanto falta (com barra de progresso) e o próximo da fila.
+  - O botão encerra o item atual na TV e passa para o próximo. O pulo chega na hora pelo WebSocket (0,5 s no teste); sem ele, em até 5 s.
+  - O próximo item começa com o tempo cheio.
+  - Se o player não dá notícias há algum tempo, o cartão avisa para conferir se ele está aberto.
+  - Por baixo: o player informa o que pôs na tela (`POST /api/player/now`, aceito só do próprio computador), o painel lê em `GET /api/player/now` e o botão chama `POST /api/player/skip`.
+  - **Atualize o player junto com o servidor.** O player da 0.11.0 ignora o botão.
 
 ### [0.11.0] — 2026-11-18
 #### Adicionado
