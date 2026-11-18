@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.6.2
+Alava Vision — Servidor (server.py) · versão 0.6.4
 
 COMO RODAR
     pip install -r requirements.txt
@@ -63,7 +63,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.6.0"
+__version__ = "0.6.4"
 
 load_dotenv()
 

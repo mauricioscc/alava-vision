@@ -7,6 +7,11 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.6.4] — 2026-11-18
+#### Alterado
+- **A porta do servidor agora vem só do `.env` (`PORT`).** `iniciar_alava_vision.bat`, `iniciar_servidor.bat` e `player.py` usavam 8080 fixo e ignoravam o `PORT` do `.env`. Para usar outra porta (ex.: no computador da TV, onde a 8080 já está ocupada), basta mudar `PORT=` no `.env`. Sem `PORT` no `.env`, continua 8080.
+- `player.py --port` continua funcionando e tem prioridade sobre o `.env`.
+
 ### [0.6.3] — 2026-11-18
 #### Adicionado
 - `?inmet=off` no endereço da tela de clima simula o INMET fora do ar: os alertas somem e aparece o aviso "INMET indisponível". Funciona com a previsão real ou junto com os cenários `?demo=`.

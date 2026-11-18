@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.6.3** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.6.4** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -21,6 +21,17 @@ python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
 python player.py
 python player.py --list-monitors     # confere a numeração dos monitores
 ```
+
+### Porta
+
+O padrão é a **8080**. Se ela já estiver em uso no computador, troque no `.env`:
+
+```
+PORT=8090
+```
+
+Os `.bat` e o player leem esse valor sozinhos. O painel passa a ser `http://localhost:8090/`.
+Se você rodar o uvicorn manualmente, use a mesma porta no `--port`.
 
 ### Monitor da TV
 
