@@ -47,6 +47,11 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 - `GET /api/notices` (avisos). `/api/calendar` ganhou `dates`, `holiday_text` e `notices` em cada dia, e `/api/player/state` ganhou `notices`, os ids dos avisos intercalados agora.
 - API: `GET/PUT/DELETE /api/schedule?scope=…` (sem `scope` continua sendo *Todos os dias*), `GET /api/schedule/rulers`, `POST /api/schedule/copy` e `GET /api/calendar?month=AAAA-MM`.
 #### Corrigido
+- **A TV voltava para o 1º item da playlist a cada salvamento no painel.** Quem estava configurando o painel via o primeiro item recomeçar várias vezes (ex.: Notícias de 300 s repetindo). Agora o player só recomeça do início quando a programação troca de bloco. Ao salvar no painel:
+  - o item na tela continua, se não foi alterado;
+  - aparece de novo já com a mudança, se foi editado;
+  - a TV passa para o próximo, se ele foi removido ou desativado.
+  (`player.py`: `after_change()`)
 - O rodapé do painel mostrava "v0.6.1".
 - A explicação "Como a TV decide o que exibir" agora cita os avisos do dia durante os itens avulsos.
 

@@ -111,6 +111,9 @@ Depois, **dentro da régua**:
 Dois blocos na mesma trilha no mesmo horário: vale o que começa mais tarde (o mais curto, se começarem juntos).
 Para conferir a decisão atual: `http://localhost:8080/api/player/state`.
 
+Salvar algo no painel não faz a TV recomeçar a playlist. O item na tela continua, e só aparece de novo se foi
+ele o editado. A playlist só recomeça do 1º item quando a programação troca de bloco.
+
 ## Estrutura
 
 ```
