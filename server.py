@@ -48,9 +48,11 @@ MAPA DO CÓDIGO
     Configuração (.env) ............. constantes logo abaixo dos imports
     Banco e migração ................ db(), init_db()
     Autenticação .................... require_auth(), GET /api/ping
-    Playlists ....................... GET/POST /api/playlists, PUT/DELETE /api/playlists/{id}
+    Playlists ....................... GET/POST /api/playlists, PUT/DELETE /api/playlists/{id},
+                                      POST /api/playlists/{id}/duplicate (cópia com todos os itens)
     Itens ........................... GET /api/playlist, POST /api/items,
-                                      PUT /api/items/reorder, PUT/DELETE /api/items/{id}
+                                      PUT /api/items/reorder, PUT/DELETE /api/items/{id},
+                                      POST /api/items/{id}/duplicate (cópia logo abaixo), _copy_item()
     Grade horária (timeline) ........ GET/PUT/DELETE /api/schedule (?scope=), _clean_block(), _write_ruler()
       réguas por dia / exceções ..... tabela rulers + coluna schedule.scope; _check_scope(), scope_label(),
                                       ruler_for_day() (PRIORIDADE: exceção > dia da semana > Todos os dias)
@@ -303,6 +305,28 @@ async def rename_playlist(pid: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/playlists/{pid}/duplicate", dependencies=[Depends(require_auth)])
+async def duplicate_playlist(pid: str, request: Request):
+    """Cria uma playlist nova com cópias de todos os itens (mesma ordem, mesmo ativo/desativado).
+    A programação (blocos da timeline) não é copiada. Corpo: {"name": "Nome da cópia"}."""
+    if pid == NOTICE_PLAYLIST:
+        raise HTTPException(400, "A playlist dos avisos por data não pode ser duplicada")
+    name = str((await request.json()).get("name", "")).strip()
+    with db() as con:
+        src = con.execute("SELECT name FROM playlists WHERE id=?", (pid,)).fetchone()
+        if not src:
+            raise HTTPException(404)
+        new_id = uuid.uuid4().hex[:12]
+        name = name or f"{src['name']} (cópia)"
+        con.execute("INSERT INTO playlists VALUES (?,?,?)", (new_id, name, int(time.time())))
+        rows = con.execute("SELECT * FROM items WHERE playlist_id=? ORDER BY ord, created_at", (pid,)).fetchall()
+        for i, r in enumerate(rows):
+            _copy_item(con, r, new_id, i, r["name"])
+        bump_version(con)
+        con.commit()
+    return {"id": new_id, "name": name, "items": len(rows)}
+
+
 @app.delete("/api/playlists/{pid}", dependencies=[Depends(require_auth)])
 def delete_playlist(pid: str):
     if pid == DEFAULT_PLAYLIST:
@@ -383,6 +407,38 @@ async def update_item(item_id: str, request: Request):
         bump_version(con)
         con.commit()
     return {"ok": True}
+
+
+# ─── Duplicar (0.11.0) ────────────────────────────────────────────────────────
+# A cópia aponta para os mesmos arquivos (imagem, vídeo, HTML em data/uploads e data/html):
+# remover um item não apaga arquivos, então original e cópia continuam funcionando sozinhos.
+
+def _copy_item(con: sqlite3.Connection, row: sqlite3.Row, playlist_id: str, ord_: int, name: str) -> str:
+    new_id = uuid.uuid4().hex[:12]
+    con.execute("INSERT INTO items (id,type,name,config,duration,active,ord,created_at,playlist_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (new_id, row["type"], name, row["config"], row["duration"], row["active"], ord_,
+                 int(time.time()), playlist_id))
+    return new_id
+
+
+@app.post("/api/items/{item_id}/duplicate", dependencies=[Depends(require_auth)])
+def duplicate_item(item_id: str):
+    """Copia o item para logo abaixo dele na mesma playlist, com o nome "… (cópia)"."""
+    with db() as con:
+        row = con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+        if not row:
+            raise HTTPException(404)
+        # Reorganiza a ordem da playlist (0, 1, 2...) e abre espaço logo depois do original
+        ids = [r["id"] for r in con.execute("SELECT id FROM items WHERE playlist_id=? ORDER BY ord, created_at",
+                                            (row["playlist_id"],))]
+        pos = ids.index(item_id)
+        for i, iid in enumerate(ids):
+            con.execute("UPDATE items SET ord=? WHERE id=?", (i if i <= pos else i + 1, iid))
+        new_id = _copy_item(con, row, row["playlist_id"], pos + 1, f"{row['name']} (cópia)")
+        bump_version(con)
+        con.commit()
+    return {"id": new_id}
 
 
 @app.delete("/api/items/{item_id}", dependencies=[Depends(require_auth)])

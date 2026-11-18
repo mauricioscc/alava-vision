@@ -20,6 +20,9 @@
     Login .......................... #login-overlay, doLogin(), api()
     Aba Playlists .................. #tab-playlists, loadPlaylists(), loadPlaylist(), renderPlaylist()
       criar/renomear/excluir ....... newPlaylist(), renamePlaylist(), deletePlaylist(), #name-modal
+      duplicar playlist ............ duplicatePlaylist() → POST /api/playlists/{id}/duplicate
+      duplicar item ................ botão ⧉ da linha (data-act="dup"), duplicateItem(), .pl-item.flash;
+                                     "⧉ Salvar e duplicar" no formulário = saveItem(true)
       reordenar (arrastar) ......... setupDrag()
       miniaturas ................... thumbHtml()
     Cadastro de item ............... #modal, openAddModal(), openEdit(), saveItem(), uploadFile()
@@ -211,6 +214,9 @@ button,input,select,textarea{font-family:inherit}
   border-radius:50%;transition:.2s;pointer-events:none}
 .toggle input:checked~.toggle-thumb{transform:translateX(16px)}
 .pl-actions{display:flex;gap:4px}
+/* Cópia recém-duplicada (0.11.0): pisca em destaque por um instante */
+.pl-item.flash{animation:plflash 2.2s ease}
+@keyframes plflash{0%,40%{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--card))}}
 .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
 .empty-state .ic{font-size:44px;display:block;margin-bottom:12px}
 
@@ -500,6 +506,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
       <select id="pl-select" onchange="selectPlaylist(this.value)"></select>
       <button class="btn btn-ghost btn-sm" onclick="newPlaylist()">+ Nova playlist</button>
       <button class="btn btn-ghost btn-sm" onclick="renamePlaylist()">Renomear</button>
+      <button class="btn btn-ghost btn-sm" onclick="duplicatePlaylist()" title="Cria uma cópia desta playlist com todos os itens">⧉ Duplicar</button>
       <button class="btn btn-danger btn-sm" id="pl-del" onclick="deletePlaylist()">Excluir</button>
       <span class="spacer"></span>
       <span class="cycle" id="cycle-time"></span>
@@ -911,6 +918,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-ghost" onclick="saveItem(true)" title="Salva este item e já abre uma cópia dele para editar">⧉ Salvar e duplicar</button>
       <button class="btn btn-primary" onclick="saveItem()">Salvar</button>
     </div>
   </div>
@@ -1146,11 +1154,14 @@ function renderPlaylist() {
       <div class="pl-actions">
         <button class="btn btn-icon btn-ghost btn-sm" data-act="pv" title="Pré-visualizar" aria-label="Pré-visualizar">👁</button>
         <button class="btn btn-icon btn-ghost btn-sm" data-act="edit" title="Editar" aria-label="Editar">✏</button>
+        <button class="btn btn-icon btn-ghost btn-sm" data-act="dup" title="Duplicar" aria-label="Duplicar">⧉</button>
         <button class="btn btn-icon btn-danger btn-sm" data-act="del" title="Remover" aria-label="Remover">🗑</button>
       </div>`;
     div.querySelectorAll('[data-act="pv"]').forEach(b => b.onclick = () => openPreview(item));
     div.querySelector('[data-act="edit"]').onclick = () => openEdit(item.id);
     div.querySelector('[data-act="del"]').onclick = () => deleteItem(item.id);
+    div.querySelector('[data-act="dup"]').onclick = () => duplicateItem(item.id);
+    if (item.id === flashId) div.classList.add('flash');   // cópia recém-criada
     div.querySelector('.toggle input').onchange = e => toggleItem(item.id, e.target.checked);
     setupDrag(div);
     el.appendChild(div);
@@ -1199,6 +1210,20 @@ async function toggleItem(id, active) {
   catch(e) { status('Erro: ' + e.message, 'err'); }
 }
 
+// Duplicar (0.11.0): a cópia entra logo abaixo do original, com o nome "… (cópia)".
+// openAfter = true abre a cópia para edição (botão "Salvar e duplicar" do formulário).
+let flashId = null;
+async function duplicateItem(id, openAfter) {
+  try {
+    const r = await api('POST', `/api/items/${id}/duplicate`);
+    flashId = r.id; setTimeout(() => { flashId = null; }, 2500);
+    await refreshAll();
+    status('Item duplicado');
+    if (openAfter) openEdit(r.id);
+    else document.querySelector(`.pl-item[data-id="${r.id}"]`)?.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  } catch(e) { status('Erro ao duplicar: ' + e.message, 'err'); }
+}
+
 async function deleteItem(id) {
   if (!confirm('Remover este item? Os blocos dele na programação também serão removidos.')) return;
   try { await api('DELETE', `/api/items/${id}`); status('Item removido'); await refreshAll(); }
@@ -1229,6 +1254,20 @@ function newPlaylist() {
       status(`Playlist "${name}" criada`);
     } catch(e) { status('Erro: ' + e.message, 'err'); }
   });
+}
+
+// Duplicar playlist (0.11.0): pede o nome da cópia (já sugere "… (cópia)") e abre a playlist nova.
+function duplicatePlaylist() {
+  const p = playlists.find(x => x.id === currentPl);
+  openNameModal('Duplicar playlist', `${p?.name || 'Playlist'} (cópia)`, async name => {
+    try {
+      const r = await api('POST', `/api/playlists/${currentPl}/duplicate`, {name});
+      currentPl = r.id; store.set('av_pl', r.id);
+      await loadPlaylists(); await loadPlaylist();
+      status(`Playlist "${name}" criada com ${r.items} ${r.items === 1 ? 'item' : 'itens'}`);
+    } catch(e) { status('Erro: ' + e.message, 'err'); }
+  });
+  setTimeout(() => $('name-input').select(), 60);
 }
 
 function renamePlaylist() {
@@ -1589,7 +1628,7 @@ function previewUrlField() {
   openPreview({type: 'url', name: $('f-name').value || 'Site', config: {url}});
 }
 
-async function saveItem() {
+async function saveItem(dup) {   // dup = "Salvar e duplicar": salva e abre a cópia para editar
   const name = $('f-name').value.trim();
   const duration = parseInt($('f-duration').value) || 30;
   if (!name) { status('Informe um nome', 'err'); return; }
@@ -1623,10 +1662,12 @@ async function saveItem() {
     if (currentType === 'countdown') config.hide_after = false;
   }
   try {
+    let savedId = editId;
     if (editId) { await api('PUT', `/api/items/${editId}`, {name, duration, config}); status(NOTICE ? 'Aviso atualizado' : 'Item atualizado'); }
-    else { await api('POST', '/api/items', {type: currentType, name, duration, config, playlist_id: NOTICE ? 'avisos' : currentPl});
+    else { savedId = (await api('POST', '/api/items', {type: currentType, name, duration, config, playlist_id: NOTICE ? 'avisos' : currentPl})).id;
            status(NOTICE ? 'Aviso adicionado' : 'Item adicionado'); }
     closeModal();
+    if (dup) { await duplicateItem(savedId, true); return; }
     await refreshAll();
   } catch(e) { status('Erro ao salvar: ' + e.message, 'err'); }
 }
