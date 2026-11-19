@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.17.0
+Alava Vision — Servidor (server.py) · versão 0.17.1
 
 COMO RODAR
     pip install -r requirements.txt
@@ -55,6 +55,8 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.17.0 (salário mínimo no rodapé e título "Notícias"):
+        git checkout b87dbf3 -- server.py static/index.html   (ou copie backup_v0.17.1_20261119/)
     Para a 0.16.0 (antes da agenda fiscal, do aviso urgente e do relatório):
         git checkout a1bb3b8 -- server.py player.py static/index.html   (ou copie backup_v0.17.0_20261119/)
         As tabelas play_log e news_log ficam no banco e a 0.16.0 só as ignora.
@@ -200,7 +202,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.17.0"
+__version__ = "0.17.1"
 
 load_dotenv()
 
@@ -1930,15 +1932,17 @@ def _fx_fetch_live() -> dict:
 # ─── Indicadores econômicos do Banco Central (0.15.0) ─────────────────────────
 # Séries do SGS (api.bcb.gov.br, grátis, sem chave). Cada uma: (código, como ler).
 #   Selic meta (432, % a.a.) · CDI (4389, % a.a.) · IPCA 12 meses (13522, %) ·
-#   IGP-M 12 meses (189 = variação MENSAL; acumulamos os últimos 12 meses) · Salário mínimo (1619, R$)
+#   IGP-M 12 meses (189 = variação MENSAL; acumulamos os últimos 12 meses)
+#   (O salário mínimo — série 1619 — saiu do rodapé na 0.17.1, a pedido do usuário. Para voltar: "salmin": 1619
+#   em BCB_SERIES, "salmin": 400 no plano de _fx_fetch_ind e a linha ind-salmin em NEWS_FX_HTML/NEWS_FX_JS.)
 # Pegadinhas vistas em 19/11/2026:
 #   • "…/ultimos/N" às vezes responde HTTP 304 com corpo vazio (cache do CDN deles). A consulta por
 #     PERÍODO (dataInicial/dataFinal) respondeu 200 em todos os testes — por isso é a usada.
-#   • A Selic meta e o salário mínimo vêm com datas FUTURAS (até a próxima reunião do Copom / o valor já
-#     aprovado para o ano seguinte). Terminar o período em HOJE pega o valor vigente.
+#   • A Selic meta vem com datas FUTURAS (até a próxima reunião do Copom). Terminar o período em HOJE pega
+#     o valor vigente.
 # Muda no máximo 1×/dia: cache de FX_TTL_IND (6 h) em data/fx_cache.json, junto com a cotação.
 FX_TTL_IND = 6 * 3600
-BCB_SERIES = {"selic": 432, "cdi": 4389, "ipca12": 13522, "igpm": 189, "salmin": 1619}
+BCB_SERIES = {"selic": 432, "cdi": 4389, "ipca12": 13522, "igpm": 189}
 
 
 def _bcb_series(code: int, days: int) -> list:
@@ -1951,7 +1955,7 @@ def _bcb_series(code: int, days: int) -> list:
 
 def _fx_fetch_ind() -> dict:
     out, errors = {}, []
-    plan = {"selic": 20, "cdi": 20, "ipca12": 120, "igpm": 430, "salmin": 400}   # dias para trás em cada consulta
+    plan = {"selic": 20, "cdi": 20, "ipca12": 120, "igpm": 430}   # dias para trás em cada consulta
     for key, days in plan.items():
         try:
             rows = _bcb_series(BCB_SERIES[key], days)
@@ -2052,7 +2056,7 @@ def get_fx(force: bool = False) -> dict:
     if ptax:
         out["ptax"] = ptax
     if ind:
-        out["ind"] = ind                                   # Selic, CDI, IPCA 12m, IGP-M 12m, salário mínimo
+        out["ind"] = ind                                   # Selic, CDI, IPCA 12m, IGP-M 12m
     return out
 
 
@@ -3658,14 +3662,13 @@ NEWS_FX_HTML = """<div class="fx" id="fx" hidden>
   <div class="grp" id="ind-cdi-g"><span class="lbl">CDI</span><span class="ind" id="ind-cdi"></span></div>
   <div class="grp" id="ind-ipca12-g"><span class="lbl" id="ind-ipca12-l">IPCA 12 meses</span><span class="ind" id="ind-ipca12"></span></div>
   <div class="grp" id="ind-igpm-g"><span class="lbl" id="ind-igpm-l">IGP-M 12 meses</span><span class="ind" id="ind-igpm"></span></div>
-  <div class="grp" id="ind-salmin-g"><span class="lbl">Salário mínimo</span><span class="ind" id="ind-salmin"></span></div>
   <div class="when">Indicadores econômicos<br>Banco Central · AwesomeAPI</div>
  </div>
 </div>"""
 NEWS_FX_JS = """
 // ─── Rodapé (0.13.0 dólar · 0.15.0 indicadores): desenha FX (embutido e renovado de /api/fx a cada 1 min) ───
 // Página A = dólar (comercial, variação, 30 dias, mín/máx, PTAX). Página B = Euro, Selic, CDI, IPCA 12m,
-// IGP-M 12m e salário mínimo. Com as duas ligadas, alternam a cada FX_PAGE_MS. Cada uma liga/desliga no item.
+// IGP-M 12m. Com as duas ligadas, alternam a cada FX_PAGE_MS. Cada uma liga/desliga no item.
 // 2 casas decimais (R$ 5,91) em todos os valores — pedido de 19/11/2026; para voltar a 4, troque d = 2 por d = 4
 const FX_PAGE_MS = 15000;
 const brl = (v, d = 2) => 'R$ ' + v.toLocaleString('pt-BR', {minimumFractionDigits: d, maximumFractionDigits: d});
@@ -3726,7 +3729,6 @@ function drawFx() {
     set('cdi', I.cdi && `${pct(I.cdi.v)}<small>a.a.</small>`);
     set('ipca12', I.ipca12 && pct(I.ipca12.v), I.ipca12 && 'IPCA 12 meses · ' + mesAno(I.ipca12.date));
     set('igpm', I.igpm && pct(I.igpm.v), I.igpm && 'IGP-M 12 meses · ' + mesAno(I.igpm.date));
-    set('salmin', I.salmin && brl(I.salmin.v));
   }
   showFxPage();
 }
@@ -3754,7 +3756,7 @@ def view_news(item_id: str, tv: int = 0):
         row = con.execute("SELECT name FROM items WHERE id=?", (item_id,)).fetchone()
     item_name_js = json.dumps(row["name"] if row else "", ensure_ascii=False).replace("</", "<\\/")
     data = json.dumps(get_news(cfg, tv=bool(tv)), ensure_ascii=False).replace("</", "<\\/")
-    title = html.escape(str(cfg.get("title") or "Notícias"))
+    title = html.escape(str(cfg.get("title") or "News"))      # 0.17.1: era "Notícias" (com a logo: ALAVA | NEWS)
     accent = _css_color(cfg.get("accent"), "#38bdf8")
     per = _num(cfg.get("per_headline"), NEWS_SECONDS_PER_CARD, 4, 120)   # padrão 30 s por card (0.13.0)
     show_img = "true" if cfg.get("show_images", True) else "false"
