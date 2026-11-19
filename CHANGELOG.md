@@ -7,6 +7,16 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.15.0] — 2026-11-19
+#### Adicionado
+- **Indicadores econômicos no rodapé das notícias.** O rodapé ganhou uma segunda página, que alterna com a do dólar a cada 15 s: **Euro** (com a variação do dia), **Selic** e **CDI** (% ao ano), **IPCA 12 meses**, **IGP-M 12 meses** (com o mês de referência) e **salário mínimo**. Fontes: Banco Central (SGS) e AwesomeAPI, grátis e sem chave; cache de 6 h. Liga e desliga por item: *Mostrar indicadores no rodapé*.
+- **Aviso quando um site cai na tela de login** (ex.: Acessórias com a sessão expirada). O player percebe o campo de senha ou o captcha, **pula o item** e mostra uma faixa amarela no painel, em todas as abas, com o passo a passo. Confere de novo a cada volta da playlist e o aviso some sozinho depois do login. Liga e desliga por item de site.
+- **`ferramentas\login_na_tv.bat`:** dois cliques no computador da TV fecham o Alava Vision, abrem o Chrome da TV no Acessórias para o login com captcha e, ao fechar o Chrome, abrem tudo de novo. Para outro site: `login_na_tv.bat https://site`.
+- **Aviso quando o Waze está fora.** O player confere se a chamada que traz o trânsito respondeu. Se o Waze não abrir ou não entregar o trânsito em 20 s, ele **pula o item**, avisa no painel e só tenta de novo depois de 5 minutos, para não insistir no reCAPTCHA. Quando o Waze volta, o aviso some sozinho.
+- Se o item com problema for o único da playlist, a TV mostra uma tela de aviso ("Trânsito indisponível no momento", "O site pediu login") em vez de ficar recarregando.
+#### Como reverter
+- `git checkout d484a6f -- server.py player.py static/index.html` ou copie `backup_v0.14.0_20261119/`.
+
 ### [0.14.0] — 2026-11-19
 #### Adicionado
 - **Botão "Atualizar sistema" no painel** (Configurações → 🔄 Sistema):
