@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.12.0
+Alava Vision — Servidor (server.py) · versão 0.13.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -16,6 +16,24 @@ COMO RODAR
         http://localhost:8080/view/countdown/<id_do_item>  → contador regressivo de um item
         http://localhost:8080/view/html/<id_do_item>       → página HTML local de um item
         http://localhost:8080/view/message-preview?c={"text":"Oi","bg_mode":"gradient"}  → prévia de mensagem
+        http://localhost:8080/api/fx            → cotação do dólar do rodapé das notícias (comercial, 30 dias, PTAX)
+        http://localhost:8080/api/news/<id_do_item_de_noticias>  → fila de notícias já ordenada (JSON; cada item
+                                  traz source, category, preferred, weight). Ver "Notícias" no MAPA DO CÓDIGO.
+    Testar os feeds do Portal Contábeis direto no terminal (sem abrir o painel):
+        python -c "import server; r=server.get_news({'feeds':['https://www.contabeis.com.br/rss/conteudo/','https://www.contabeis.com.br/rss/noticias/','https://www.contabeis.com.br/rss/legislacao/']}, force=True); print(r['feeds']); print([(i['category'], i['title']) for i in r['items'][:8]])"
+    Notícias (0.13.0) — onde ajustar (tudo em server.py, seção "Notícias (RSS / Atom)"):
+        Tempo de cache ............... NEWS_TTL (padrão 600 s = 10 min; mude com NEWS_TTL=900 no .env)
+        Pesos dos feeds .............. NEWS_DEFAULT_WEIGHTS (padrão do servidor) e config.weights (por item, no painel)
+        Quem é "preferencial" ........ NEWS_PREFERRED_MIN (peso ≥ 8)
+        Proporção preferenciais ...... NEWS_PREFERRED_RATIO (0.75 = 3 de cada 4); config.preferred_ratio por item
+        Segundos de cada card ........ NEWS_SECONDS_PER_CARD (padrão 30; config.per_headline por item)
+        Revezamento entre fontes ..... _round_robin_by_source() (cada fonte entrega uma matéria por rodada)
+        Palavras que sobem a matéria . NEWS_BOOST_WORDS (config.boost_words por item) e NEWS_BOOST_HOURS
+        Idade máxima da notícia ...... NEWS_MAX_AGE_DAYS (config.max_age_days; 0 = sem limite)
+        Rodapé do dólar .............. get_fx() (FX_TTL_LIVE 2 min, FX_TTL_SLOW 30 min, FX_RETRY 1 min), _fx_fetch_live/
+                                       _spark/_ptax (troque a fonte aqui), NEWS_FX_CSS/HTML/JS (visual; casas decimais: brl()),
+                                       cache data/fx_cache.json; desliga por item com config.show_fx
+        Cache no disco ............... data/news_cache.json (a TV continua com notícias se a internet cair e o servidor reiniciar)
     Aviso instantâneo (WebSocket) para o player:
         ws://localhost:8080/ws/player  → manda o estado ao conectar e de novo a cada mudança.
         No terminal do servidor aparecem "[push] player conectado/desconectado".
@@ -29,6 +47,10 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.12.0 (antes da prioridade contábil nas notícias):
+        git checkout main -- server.py static/index.html     (ou a tag backup-antes-rss-contabeis-20261119)
+        ou copie backup_rss_20261119/server.py e backup_rss_20261119/static/ por cima dos atuais.
+        Itens de notícias salvos na 0.13.0 abrem normalmente na 0.12.0 (os campos novos são ignorados).
     Para a 0.11.0 (antes do botão de tema claro/escuro, que só muda o painel):
         git checkout 6efc5ba -- static/index.html
     Para a 0.10.0 (antes do calendário e das réguas por dia da semana):
@@ -83,6 +105,10 @@ MAPA DO CÓDIGO
       previsão embutida na tela ..... view_weather() troca WX_DATA_MARK pelo JSON do cache
       status do INMET ............... get_weather() define w["inmet_status"]: "ok" | "unavailable" | "disabled"
       filtro de garoa falsa ......... _fix_drizzle() (usada em _build_weather no "agora")
+      tempo OBSERVADO (0.13.0) ...... _apply_observed() em get_weather(): condição, temperatura, umidade e sensação
+                                      vêm do METAR do aeroporto mais próximo (_fetch_metar, _metar_code,
+                                      _rh_from_dewpoint, _heat_index; METAR_STATION no .env). Sem METAR: modelo com
+                                      a trava _sane_model_code(). current.*_model = o que o modelo dizia.
       comparação de modelos ......... _log_model_compare() → data/wx_compare.csv (WX_COMPARE no .env)
     Telas exibidas pelo player ...... /view/image/{id}, /view/video/{id}, /view/weather,
                                       /view/traffic, /view/message/{id},
@@ -91,6 +117,13 @@ MAPA DO CÓDIGO
       notícias (RSS) ................ /view/news/{id} (logo Alava no cabeçalho: config.show_logo, .top .logo), GET /api/news/{id}, POST /api/news-test,
                                       get_news() (filtro, sem repetidas), _fetch_feed() (cache NEWS_TTL),
                                       _parse_feed() (RSS e Atom), _warm_news() (em 2º plano, com o clima)
+        prioridade contábil (0.13.0) . get_news() → _feed_weight() (peso por feed), _boost_hits() (palavras-chave),
+                                      _news_dedupe_key() (mesma matéria em /conteudo e /noticias), _interleave()
+                                      (fila ponderada: 3 de cada 4 vêm de feed preferencial); cada item sai com
+                                      source/category/preferred/weight e r["feeds"] = contagem por feed ("Testar feed")
+        cache em disco ................ _load_news_cache(), _save_news_cache() → data/news_cache.json
+        selo na TV e foto padrão ...... view_news(): .tag (FONTE • CATEGORIA, .tag.pref = preferencial) e .pic.brand
+                                      (logo Alava quando a matéria não traz foto)
       curiosidades e datas .......... /view/today (?d=AAAA-MM-DD), GET /api/today, GET/PUT /api/curiosities,
                                       POST /api/curiosities/reset, today_info(), parse_curio(), holidays()
                                       (BrasilAPI → data/feriados_AAAA.json), today_auto_settings();
@@ -128,7 +161,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 load_dotenv()
 
@@ -1097,12 +1130,58 @@ async def image_import(request: Request):
 # (cache de 10 min por endereço, em paralelo), junta, tira repetidas e as que têm
 # palavras de config.block_words, ordena da mais nova para a mais antiga e entrega até
 # config.max_items manchetes para a tela /view/news/{id}.
+#
+# PRIORIDADE CONTÁBIL (0.13.0). Cada feed tem um PESO de 1 a 10 (config.weights[url]; sem ele vale
+# NEWS_DEFAULT_WEIGHTS; sem nenhum, 5). Feeds com peso ≥ NEWS_PREFERRED_MIN são "preferenciais".
+# Quando o item tem pelo menos um feed preferencial, get_news() troca a ordenação só-por-data por:
+#   1. descarta matéria velha demais (NEWS_MAX_AGE_DAYS) — o /rss/legislacao/ do Contábeis está
+#      parado em 2020 e não pode aparecer na TV como se fosse novidade;
+#   2. tira repetidas (mesmo link ou mesmo título — /rss/conteudo/ e /rss/noticias/ repetem ~70%),
+#      ficando com a cópia do feed de maior peso;
+#   3. dá nota a cada matéria = recência + bônus do peso + bônus por palavra-chave no título;
+#   4. entrega em fila ponderada: NEWS_PREFERRED_RATIO das vagas para preferenciais (0.75 = 3 de
+#      cada 4) e o resto para as demais fontes; se um grupo acabar, o outro completa a fila.
+# Item sem feed preferencial continua exatamente como antes (só por data).
 
-NEWS_TTL = 600
+NEWS_TTL = int(os.getenv("NEWS_TTL", "600"))             # cache de cada feed, em segundos (10 min)
+NEWS_FETCH_TIMEOUT = 10                                  # espera máxima por feed, em segundos
+NEWS_USER_AGENT = "Mozilla/5.0 (compatible; AlavaVision/0.13; leitor de RSS)"
+NEWS_CACHE_FILE = DATA_DIR / "news_cache.json"          # cópia em disco: sobrevive a reinício sem internet
 _news_cache: dict[str, tuple[float, list[dict]]] = {}   # url → (quando, manchetes)
+_news_cache_lock = threading.Lock()
+_news_cache_loaded = False
 # Nome exibido da fonte quando o título do canal não ajuda (ex.: Agência Brasil manda "Feed Últimas")
 NEWS_SOURCE_NAMES = {"agenciabrasil.ebc.com.br": "Agência Brasil", "feeds.bbci.co.uk": "BBC News Brasil",
-                     "www.infomoney.com.br": "InfoMoney"}
+                     "www.infomoney.com.br": "InfoMoney", "www.contabeis.com.br": "Portal Contábeis",
+                     "www.jornalcontabil.com.br": "Jornal Contábil", "www.cfc.org.br": "CFC",
+                     "www.fenacon.org.br": "FENACON", "www.conjur.com.br": "ConJur"}
+# Categoria da etiqueta quando a matéria não traz <category> (o /rss/legislacao/ não traz).
+# Chave = trecho do endereço do feed.
+NEWS_FEED_CATEGORIES = {"contabeis.com.br/rss/legislacao": "Legislação", "contabeis.com.br/rss/noticias": "Notícias",
+                        "contabeis.com.br/rss/conteudo": "Conteúdo"}
+# ── ONDE AJUSTAR OS PESOS ── (1 = mínimo, 10 = máximo). O painel grava o peso de cada feed no item
+# (Alta = 10, Normal = 5, Baixa = 2); esta tabela vale para itens que ainda não têm peso salvo.
+NEWS_DEFAULT_WEIGHTS = {
+    "https://www.contabeis.com.br/rss/conteudo/": 10,     # Portal Contábeis — últimas matérias (principal)
+    "https://www.contabeis.com.br/rss/noticias/": 9,      # Portal Contábeis — notícias publicadas
+    "https://www.contabeis.com.br/rss/legislacao/": 10,   # Portal Contábeis — atos legais (máxima)
+    "https://www.contabeis.com.br/rss/artigos/": 8,       # Portal Contábeis — artigos
+    "https://www.jornalcontabil.com.br/feed/": 9,         # Jornal Contábil — notícias para contadores
+    "https://www.cfc.org.br/feed/": 9,                    # CFC — Conselho Federal de Contabilidade (oficial)
+    "https://www.fenacon.org.br/feed/": 8,                # FENACON — federação das empresas contábeis
+}                                                         # (ConJur Tributário e Agência Brasil Economia ficam no peso normal)
+NEWS_DEFAULT_WEIGHT = 5          # feed sem peso definido
+NEWS_PREFERRED_MIN = 8           # peso a partir do qual o feed é "Preferencial / Foco Contábil"
+NEWS_PREFERRED_RATIO = 0.75      # fatia da fila para preferenciais (0.75 = 3 de cada 4 notícias)
+NEWS_MAX_AGE_DAYS = 30           # no modo prioridade, ignora matéria mais velha que isto (0 = sem limite)
+# ── ONDE AJUSTAR AS PALAVRAS-CHAVE ── (separadas por vírgula; sem diferenciar acento/maiúscula; cada
+# palavra vale como INÍCIO de palavra: "fiscal" pega "fiscalização"). Só olha o TÍTULO.
+NEWS_BOOST_WORDS = ("receita federal, simples nacional, irpf, imposto de renda, dctfweb, esocial, reforma tributária, "
+                    "icms, iss, pis, cofins, sped, nota fiscal, fiscal, prazo, legislação, mei, tributári, "
+                    "folha de pagamento, inss, fgts, cnd, ecf, ecd")
+NEWS_SECONDS_PER_CARD = 30       # tempo padrão de cada card de notícia na TV (config.per_headline; era 9 s até a 0.12.0)
+NEWS_BOOST_HOURS = 8            # cada palavra-chave "rejuvenesce" a matéria em 8 h na fila (máx. 3 palavras)
+NEWS_WEIGHT_HOURS = 2            # cada ponto de peso acima de 5 vale 2 h de vantagem (peso 10 = +10 h)
 
 
 def _local(tag: str) -> str:
@@ -1114,6 +1193,47 @@ def _strip_html(s: str) -> str:
     import re
     s = re.sub(r"<[^>]+>", " ", s or "")
     return " ".join(html.unescape(s).split())
+
+
+def _clean_summary(s: str) -> str:
+    """Tira do resumo o rodapé "Leia mais em https://…" (o Contábeis manda em toda matéria) e
+    endereços soltos: na TV ninguém clica, e a linha só ocupa espaço."""
+    import re
+    s = re.sub(r"\s*(?:leia mais|veja mais|saiba mais|continue lendo)[^.]{0,12}\s*https?://\S+", "", s, flags=re.I)
+    s = re.sub(r"https?://\S+", "", s)
+    # WordPress (Jornal Contábil, CFC, FENACON, ConJur) fecha o resumo com "O post X apareceu primeiro em Y."
+    # e usa "[…]" para cortar o texto.
+    s = re.sub(r"\s*(?:O post|The post)\b.{0,300}?(?:apareceu primeiro (?:em|no|na)|appeared first on)\b.*$", "", s, flags=re.I)
+    s = re.sub(r"\s*\[(?:…|\.\.\.)\]\s*", "… ", s).strip()
+    return " ".join(s.split())
+
+
+def _first_image(markup: str) -> str:
+    """Primeira foto de verdade dentro de um trecho de HTML (o <content:encoded> dos feeds WordPress).
+    Pula emoji, avatar, pixel de rastreio e imagens minúsculas, que viram "foto" de uma notícia à toa."""
+    import re
+    for tag in re.finditer(r"<img\b[^>]*>", html.unescape(markup or ""), flags=re.I):
+        t = tag.group(0)
+        m = re.search(r"""\bsrc=["']([^"']+)""", t, flags=re.I)
+        if not m or not m.group(1).startswith(("http://", "https://")):
+            continue
+        src = m.group(1)
+        if re.search(r"emoji|gravatar|smilies|pixel|spacer|1x1|/avatar", src, flags=re.I):
+            continue
+        size = re.findall(r"""\b(?:width|height)=["']?(\d+)""", t, flags=re.I)
+        if size and min(int(x) for x in size) < 80:
+            continue
+        return src
+    return ""
+
+
+def _plain(s: str) -> str:
+    """Minúsculas e sem acento/pontuação — para comparar títulos e palavras-chave."""
+    import re
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(s or "").lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
 
 
 def _parse_feed(data: bytes, url: str) -> list[dict]:
@@ -1130,7 +1250,7 @@ def _parse_feed(data: bytes, url: str) -> list[dict]:
     for it in root.iter():
         if _local(it.tag) not in ("item", "entry"):
             continue
-        f = {"title": "", "summary": "", "image": "", "ts": 0.0, "link": ""}
+        f = {"title": "", "summary": "", "image": "", "ts": 0.0, "link": "", "category": ""}
         for ch in it:
             name, text = _local(ch.tag), (ch.text or "").strip()
             if name == "title":
@@ -1149,6 +1269,11 @@ def _parse_feed(data: bytes, url: str) -> list[dict]:
                 f["image"] = ch.get("url", "")
             elif name == "imagem-destaque" and text:
                 f["image"] = text
+            elif name == "encoded" and not f["image"]:
+                f["image"] = _first_image(text)        # <content:encoded> (WordPress): a foto vem aqui
+            elif name == "category" and not f["category"]:
+                # RSS: <category>Tributário</category>; Atom: <category term="Tributário"/>
+                f["category"] = _strip_html(text or ch.get("term", ""))[:40]
             if "ichef.bbci.co.uk" in f["image"]:   # a BBC manda miniatura de 240 px; pede 800 px
                 f["image"] = f["image"].replace("/ws/240/", "/ws/800/")
             elif name in ("pubDate", "published", "updated") and not f["ts"]:
@@ -1164,33 +1289,123 @@ def _parse_feed(data: bytes, url: str) -> list[dict]:
         if not f["summary"]:
             f["summary"] = f.get("_desc", "")
         f.pop("_desc", None)
+        f["summary"] = _clean_summary(f["summary"])
         if len(f["summary"]) > 240:
             f["summary"] = f["summary"][:237].rsplit(" ", 1)[0] + "…"
         if f["title"]:
             host = urllib.parse.urlparse(url).hostname or ""
             f["source"] = NEWS_SOURCE_NAMES.get(host) or source or host
+            if not f["category"]:        # feed sem <category> (ex.: legislação): usa o nome da seção
+                f["category"] = next((c for k, c in NEWS_FEED_CATEGORIES.items() if k in url.lower()), "")
+            if f["category"] and _plain(f["category"]) in _plain(f["source"]):
+                f["category"] = ""       # g1 manda <category>G1</category> e a fonte já é "g1 > Economia": selo repetido
             out.append(f)
     return out
 
 
+def _load_news_cache() -> None:
+    """Lê data/news_cache.json uma vez, no 1º uso. É o "último cache válido": se a internet cair
+    com o servidor desligado, a TV volta com as notícias de antes em vez de ficar vazia."""
+    global _news_cache_loaded
+    if _news_cache_loaded:
+        return
+    _news_cache_loaded = True
+    try:
+        saved = json.loads(NEWS_CACHE_FILE.read_text(encoding="utf-8"))
+        for url, (when, items) in saved.items():
+            _news_cache.setdefault(url, (float(when), items))
+    except (OSError, ValueError, TypeError):
+        pass   # sem arquivo (1ª vez) ou arquivo corrompido: começa vazio
+
+
+def _save_news_cache() -> None:
+    try:
+        with _news_cache_lock:
+            snapshot = {u: [w, it] for u, (w, it) in _news_cache.items()}
+            tmp = NEWS_CACHE_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(NEWS_CACHE_FILE)          # troca atômica: nunca fica pela metade
+    except OSError as e:
+        print(f"[notícias] não consegui gravar o cache em disco: {e}")
+
+
 def _fetch_feed(url: str, force: bool = False) -> list[dict]:
+    _load_news_cache()
     hit = _news_cache.get(url)
     if hit and not force and time.time() - hit[0] < NEWS_TTL:
         return hit[1]
     import gzip
-    req = urllib.request.Request(url, headers={"User-Agent": "AlavaVision/1.0", "Accept-Encoding": "identity"})
+    req = urllib.request.Request(url, headers={"User-Agent": NEWS_USER_AGENT, "Accept-Encoding": "identity",
+                                               "Accept": "application/rss+xml, application/xml, text/xml, */*"})
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=NEWS_FETCH_TIMEOUT) as r:
             data = r.read(5 * 1024 * 1024)
         if data[:2] == b"\x1f\x8b":          # alguns servidores mandam gzip mesmo sem pedir
             data = gzip.decompress(data)
         items = _parse_feed(data.lstrip(b"\xef\xbb\xbf \t\r\n"), url)
     except Exception:
-        if hit:                  # sem internet: usa o que tinha
+        if hit:                  # sem internet: usa o que tinha (memória ou disco)
             return hit[1]
         raise
     _news_cache[url] = (time.time(), items)
+    _save_news_cache()
     return items
+
+
+def _feed_weight(url: str, cfg: dict) -> int:
+    """Peso 1–10 do feed: o do item (config.weights) → o padrão do servidor → NEWS_DEFAULT_WEIGHT."""
+    saved = cfg.get("weights")
+    w = saved.get(url) if isinstance(saved, dict) else None
+    if w is None:
+        w = NEWS_DEFAULT_WEIGHTS.get(url)
+    if w is None:   # mesmo feed escrito sem a "/" final
+        w = NEWS_DEFAULT_WEIGHTS.get(url.rstrip("/") + "/")
+    return _num(w, NEWS_DEFAULT_WEIGHT, 1, 10)
+
+
+def _boost_hits(title: str, boost_re) -> int:
+    """Quantas palavras-chave estratégicas aparecem no título (no máximo 3)."""
+    if not boost_re:
+        return 0
+    return min(3, len({m.group(0) for m in boost_re.finditer(_plain(title))}))
+
+
+def _news_dedupe_keys(it: dict) -> tuple[str, str]:
+    """(link, título) normalizados: a mesma matéria vinda de feeds diferentes tem um dos dois igual."""
+    link = (it.get("link") or "").split("#")[0].split("?")[0].rstrip("/").lower()
+    return link, _plain(it.get("title"))
+
+
+def _round_robin_by_source(items: list[dict]) -> list[dict]:
+    """Reveza as fontes dentro de um grupo (recebe a lista já ordenada pela nota). Sem isto, uma fonte que
+    publica toda hora (o Contábeis, a cada 30 min) ocuparia todas as vagas e as outras nunca apareceriam.
+    Cada fonte entrega a sua melhor matéria por vez; a fonte com a melhor nota abre a rodada."""
+    groups: dict[str, list[dict]] = {}
+    for it in items:
+        groups.setdefault(it["source"], []).append(it)
+    rounds = sorted(groups.values(), key=lambda g: -g[0]["score"])
+    out = []
+    while any(rounds):
+        for g in rounds:
+            if g:
+                out.append(g.pop(0))
+    return out
+
+
+def _interleave(pref: list[dict], other: list[dict], ratio: float, limit: int) -> list[dict]:
+    """Fila ponderada: de cada vaga, `ratio` vai para os preferenciais (0.75 → P P G P, P P G P…).
+    Se um dos grupos acabar, o outro completa até `limit`. Cada lista já vem ordenada pela nota."""
+    out, taken_pref = [], 0
+    pref, other = list(pref), list(other)
+    while len(out) < limit and (pref or other):
+        # Quantos preferenciais já deveriam ter saído depois desta vaga?
+        want_pref = int(ratio * (len(out) + 1) + 0.5) > taken_pref
+        if (want_pref and pref) or not other:
+            out.append(pref.pop(0))
+            taken_pref += 1
+        else:
+            out.append(other.pop(0))
+    return out
 
 
 def get_news(cfg: dict, force: bool = False) -> dict:
@@ -1202,30 +1417,76 @@ def get_news(cfg: dict, force: bool = False) -> dict:
     words = [w.strip().lower() for w in str(cfg.get("block_words", "")).split(",") if w.strip()]
     block_re = re.compile(r"\b(" + "|".join(map(re.escape, words)) + ")") if words else None
     max_items = _num(cfg.get("max_items"), 15, 1, 60)
-    items, errors = [], []
+
+    # Prioridade contábil: só liga se houver pelo menos um feed preferencial (peso alto) no item.
+    weights = {u: _feed_weight(u, cfg) for u in feeds}
+    prio = cfg.get("prioritize", True) and any(w >= NEWS_PREFERRED_MIN for w in weights.values())
+    ratio = max(0.0, min(1.0, _num(cfg.get("preferred_ratio"), int(NEWS_PREFERRED_RATIO * 100), 0, 100) / 100))
+    max_age = _num(cfg.get("max_age_days"), NEWS_MAX_AGE_DAYS if prio else 0, 0, 3650)
+    boost_src = cfg["boost_words"] if "boost_words" in cfg else NEWS_BOOST_WORDS
+    boost_words = [_plain(w) for w in str(boost_src).split(",") if _plain(w)]
+    boost_re = re.compile(r"\b(" + "|".join(map(re.escape, boost_words)) + ")") if boost_words and prio else None
+
+    items, errors, stats = [], [], []
     with ThreadPoolExecutor(max_workers=6) as ex:
         for url, res in zip(feeds, ex.map(lambda u: _try(_fetch_feed, u, force), feeds)):
+            host = urllib.parse.urlparse(url).hostname
             if isinstance(res, Exception):
-                errors.append(f"{urllib.parse.urlparse(url).hostname}: {res}")
+                errors.append(f"{host}: {res}")
+                stats.append({"url": url, "weight": weights[url], "read": 0, "fresh": 0, "error": str(res)[:120]})
             else:
-                items += res
+                # cópia: o cache guarda os dicionários originais e aqui eles ganham campos de trabalho
+                items += [dict(i, feed=url, weight=weights[url]) for i in res]
+                stats.append({"url": url, "weight": weights[url], "read": len(res), "fresh": 0, "error": ""})
     # "VÍDEOS: Jornal da Manhã…" e "EPTV 1 Campinas ao vivo" (g1) são listas de vídeos e
     # chamadas de transmissão: na TV viram um título sem conteúdo, então saem.
     # "VÍDEO: cratera engole caminhão" (singular) é notícia de verdade: só perde o prefixo.
     video_re = re.compile(r"^v[íi]deos\s*:|\bao vivo\s*$", re.I) if cfg.get("skip_videos", True) else None
     for it in items:
         it["title"] = re.sub(r"^v[íi]deo\s*:\s*", "", it["title"], flags=re.I)
-    seen, out = set(), []
-    for it in sorted(items, key=lambda x: -x["ts"]):
-        key = it["title"].lower()
+
+    now = time.time()
+    for it in items:
+        # nota (em "horas de frescor"): quanto maior, mais cedo na fila
+        it["score"] = it["ts"] / 3600.0
+        if prio:
+            it["score"] += (it["weight"] - 5) * NEWS_WEIGHT_HOURS + _boost_hits(it["title"], boost_re) * NEWS_BOOST_HOURS
+    # Cópia de feed de maior peso vem primeiro (e vence a deduplicação); depois, a mais pontuada.
+    items.sort(key=lambda x: (-x["weight"] if prio else 0, -x["score"]))
+
+    seen_link, seen_title, kept = set(), set(), []
+    fresh = {}
+    for it in items:
         text = (it["title"] + " " + it["summary"]).lower()
-        if key in seen or (block_re and block_re.search(text)) or (video_re and video_re.search(it["title"])):
+        if (block_re and block_re.search(text)) or (video_re and video_re.search(it["title"])):
             continue
-        seen.add(key)
+        if max_age and it["ts"] and now - it["ts"] > max_age * 86400:
+            continue                                               # velha demais (ex.: legislação de 2020)
+        fresh[it["feed"]] = fresh.get(it["feed"], 0) + 1           # conta ANTES de deduplicar ("Testar feed")
+        link, title = _news_dedupe_keys(it)
+        if (link and link in seen_link) or title in seen_title:
+            continue                                               # a mesma matéria já entrou por outro feed
+        if link:
+            seen_link.add(link)
+        seen_title.add(title)
+        kept.append(it)
+    for s in stats:
+        s["fresh"] = fresh.get(s["url"], 0)
+
+    if prio:
+        pref = _round_robin_by_source(sorted((i for i in kept if i["weight"] >= NEWS_PREFERRED_MIN), key=lambda x: -x["score"]))
+        other = _round_robin_by_source(sorted((i for i in kept if i["weight"] < NEWS_PREFERRED_MIN), key=lambda x: -x["score"]))
+        ordered = _interleave(pref, other, ratio, max_items)
+    else:
+        ordered = sorted(kept, key=lambda x: -x["ts"])[:max_items]    # como na 0.12.0: só por data
+    out = []
+    for it in ordered:
+        it["preferred"] = prio and it["weight"] >= NEWS_PREFERRED_MIN
+        for k in ("feed", "score"):
+            it.pop(k, None)
         out.append(it)
-        if len(out) >= max_items:
-            break
-    return {"items": out, "errors": errors, "updated_at": datetime.now().strftime("%H:%M")}
+    return {"items": out, "errors": errors, "feeds": stats, "priority": bool(prio),
+            "updated_at": datetime.now().strftime("%H:%M")}
 
 
 def _try(fn, *a):
@@ -1243,7 +1504,126 @@ def api_news(item_id: str):
 @app.post("/api/news-test", dependencies=[Depends(require_auth)])
 async def api_news_test(request: Request):
     """Painel: testa os feeds digitados antes de salvar (mostra quantas manchetes e os erros)."""
-    return await asyncio.to_thread(get_news, await request.json())
+    return await asyncio.to_thread(get_news, await request.json(), True)
+
+
+# ─── Cotação do dólar (rodapé da tela de notícias, 0.13.0) ───────────────────
+#
+# Três dados, cada um com seu cache (memória + data/fx_cache.json):
+#   • "live"  — dólar comercial agora: AwesomeAPI /json/last/USD-BRL (grátis, sem chave; muda a cada ~1 min).
+#               Traz compra (bid), variação do dia (%), mínima e máxima.            → FX_TTL_LIVE (2 min)
+#   • "spark" — fechamento dos últimos 30 dias: AwesomeAPI /json/daily/USD-BRL/30.  → FX_TTL_SLOW (30 min)
+#               O último ponto (hoje) é trocado pelo valor ao vivo, então a linha se mexe durante o dia.
+#               (A série "intradiária" da API vem limitada a 100 pontos e, no teste, às vezes devolveu
+#               dados de dias atrás: por isso o gráfico é de 30 dias.)
+#   • "ptax"  — PTAX de venda do Banco Central (taxa oficial usada na contabilidade). → FX_TTL_SLOW
+#               Sai por volta das 13h; antes disso vale a do dia útil anterior.
+# Sem internet: usa o último valor salvo e espera FX_RETRY s antes de tentar de novo (a tela não trava).
+# Para trocar a fonte, mexa só em _fx_fetch_*; o formato entregue por get_fx() é o que a tela usa.
+
+FX_TTL_LIVE = 120
+FX_TTL_SLOW = 1800
+FX_RETRY = 60
+FX_TIMEOUT = 6
+FX_CACHE_FILE = DATA_DIR / "fx_cache.json"
+_fx: dict[str, dict] = {}           # parte → {"at": quando buscou, "fail": última falha, "data": ...}
+_fx_lock = threading.Lock()
+_fx_loaded = False
+
+
+def _fx_json(url: str):
+    req = urllib.request.Request(url, headers={"User-Agent": NEWS_USER_AGENT, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=FX_TIMEOUT) as r:
+        return json.loads(r.read(512 * 1024))
+
+
+def _fx_fetch_live() -> dict:
+    q = _fx_json("https://economia.awesomeapi.com.br/json/last/USD-BRL")["USDBRL"]
+    return {"bid": float(q["bid"]), "pct": float(q["pctChange"]), "high": float(q["high"]),
+            "low": float(q["low"]), "ts": int(q["timestamp"])}
+
+
+def _fx_fetch_spark() -> list:
+    rows = _fx_json("https://economia.awesomeapi.com.br/json/daily/USD-BRL/30")
+    pts = sorted(((int(r["timestamp"]), float(r["bid"])) for r in rows), key=lambda p: p[0])
+    by_day: dict[str, float] = {}
+    for ts, v in pts:                       # um ponto por dia (o último do dia)
+        by_day[datetime.fromtimestamp(ts).strftime("%Y-%m-%d")] = v
+    return [{"d": d, "v": v} for d, v in sorted(by_day.items())]
+
+
+def _fx_fetch_ptax() -> dict:
+    end = _date.today()
+    start = end - _timedelta(days=10)       # 10 dias cobre feriado prolongado
+    url = ("https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/CotacaoDolarPeriodo("
+           "dataInicial=@i,dataFinalCotacao=@f)?" + urllib.parse.urlencode(
+               {"@i": f"'{start:%m-%d-%Y}'", "@f": f"'{end:%m-%d-%Y}'", "$format": "json",
+                "$select": "cotacaoVenda,dataHoraCotacao"}))
+    rows = _fx_json(url)["value"]
+    last = max(rows, key=lambda r: r["dataHoraCotacao"])
+    return {"sell": float(last["cotacaoVenda"]), "date": last["dataHoraCotacao"][:10]}
+
+
+def _fx_part(name: str, fetch, ttl: int, force: bool = False):
+    """Devolve o dado guardado se ainda vale; senão busca. Falhou: devolve o antigo (ou None)."""
+    global _fx_loaded
+    with _fx_lock:
+        if not _fx_loaded:
+            _fx_loaded = True
+            try:
+                _fx.update(json.loads(FX_CACHE_FILE.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
+        part = _fx.get(name) or {}
+    now = time.time()
+    fresh = part.get("data") is not None and now - part.get("at", 0) < ttl
+    waiting = now - part.get("fail", 0) < FX_RETRY            # falhou há pouco: não insiste
+    if (fresh and not force) or (waiting and not force):
+        return part.get("data")
+    try:
+        data = fetch()
+    except Exception as e:
+        print(f"[cotação] {name}: {e}")
+        with _fx_lock:
+            _fx[name] = dict(part, fail=now)
+        return part.get("data")
+    with _fx_lock:
+        _fx[name] = {"at": now, "fail": 0, "data": data}
+        try:
+            tmp = FX_CACHE_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(_fx, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(FX_CACHE_FILE)
+        except OSError:
+            pass
+    return data
+
+
+def get_fx(force: bool = False) -> dict:
+    """Tudo que o rodapé precisa. Campos ausentes = sem dado ainda (a tela esconde aquele pedaço)."""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3) as ex:      # as três em paralelo: no pior caso espera FX_TIMEOUT, não 3×
+        f_live = ex.submit(_fx_part, "live", _fx_fetch_live, FX_TTL_LIVE, force)
+        f_spark = ex.submit(_fx_part, "spark", _fx_fetch_spark, FX_TTL_SLOW, force)
+        f_ptax = ex.submit(_fx_part, "ptax", _fx_fetch_ptax, FX_TTL_SLOW, force)
+    live, spark, ptax = f_live.result(), list(f_spark.result() or []), f_ptax.result()
+    out = {"ok": bool(live)}
+    if live:
+        day = datetime.fromtimestamp(live["ts"]).strftime("%Y-%m-%d")
+        if spark and spark[-1]["d"] == day:
+            spark[-1] = {"d": day, "v": live["bid"]}       # hoje = valor ao vivo
+        elif spark and spark[-1]["d"] < day:
+            spark.append({"d": day, "v": live["bid"]})
+        out.update(live, day=day, today=day == _date.today().isoformat(),
+                   at=datetime.fromtimestamp(live["ts"]).strftime("%H:%M"))
+    out["spark"] = spark[-30:]
+    if ptax:
+        out["ptax"] = ptax
+    return out
+
+
+@app.get("/api/fx")
+def api_fx():
+    return get_fx()
 
 
 # ─── Curiosidades e datas ("Hoje é Dia de…") ─────────────────────────────────
@@ -1708,7 +2088,7 @@ def _fetch_forecast(lat: str, lon: str) -> dict:
         "timezone": "auto",
         "forecast_days": 7,
         "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,"
-                   "wind_speed_10m,wind_gusts_10m,is_day,precipitation",
+                   "wind_speed_10m,wind_gusts_10m,is_day,precipitation,cloud_cover",
         "hourly": "precipitation_probability",
         "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
                  "precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset",
@@ -1728,6 +2108,156 @@ def _fix_drizzle(code, precip):
     if code in DRIZZLE_CODES and (precip or 0) < DRIZZLE_MIN_MM:
         return 2
     return code
+
+
+# ─── Tempo OBSERVADO agora (0.13.0) ───────────────────────────────────────────
+#
+# O "current" da Open-Meteo NÃO é observação: é o modelo estimando o agora. Em 19/11/2026, às 13h45,
+# o modelo padrão (best_match) dizia "Trovoadas" (código 95, por causa de muita energia convectiva e
+# 0,2 mm previstos), enquanto os 5 aeroportos do Rio observavam poucas nuvens. Por isso a condição
+# atual (ícone, texto e fundo animado) passa a vir do METAR — o boletim oficial de tempo observado que
+# todo aeroporto publica de hora em hora (e na hora, se o tempo muda: SPECI). Fonte: aviationweather.gov
+# (NOAA, grátis, sem chave). A previsão (7 dias, chance de chuva) continua vindo do modelo.
+#
+#   METAR_STATION no .env ... código ICAO fixo (ex.: SBJR = Jacarepaguá). Vazio = o mais próximo, sozinho.
+#   METAR_MAX_KM ............ distância máxima da estação automática (mais longe que isso, não vale)
+#   METAR_MAX_AGE_MIN ....... boletim mais velho que isso é ignorado (volta para o modelo)
+# Sem METAR válido: usa o modelo, mas trovoada/chuva com menos de MODEL_STORM_MIN_MM previstos
+# vira nublado/parcialmente nublado (_sane_model_code) — era exatamente o caso do fundo de tempestade.
+METAR_STATION = os.getenv("METAR_STATION", "").strip().upper()
+METAR_MAX_KM = 40
+METAR_MAX_AGE_MIN = 100
+MODEL_STORM_MIN_MM = 0.5
+_metar_last: dict = {"data": None}          # último boletim bom (se a internet falhar, vale enquanto não envelhecer)
+
+
+def _km(lat1, lon1, lat2, lon2) -> float:
+    import math
+    p = math.pi / 180
+    a = (math.sin((lat2 - lat1) * p / 2) ** 2 +
+         math.cos(lat1 * p) * math.cos(lat2 * p) * math.sin((lon2 - lon1) * p / 2) ** 2)
+    return 12742 * math.asin(math.sqrt(a))
+
+
+def _metar_code(m: dict) -> int:
+    """METAR → código WMO usado pela tela (os mesmos números da Open-Meteo).
+    Fenômeno no local (TS, RA, DZ, SN, FG) manda; sem fenômeno, vale a maior cobertura de nuvens.
+    "VC…" (nas vizinhanças) e "RE…" (recente, já passou) não contam como tempo no local."""
+    tokens = [t for t in (m.get("wxString") or "").upper().split() if not t.startswith(("VC", "RE"))]
+    def has(code):
+        return next((t for t in tokens if code in t), None)
+    if (t := has("TS")):
+        return 99 if ("GR" in t or "GS" in t) else 95
+    if (t := has("SN")):
+        return 75 if t.startswith("+") else 71 if t.startswith("-") else 73
+    if (t := has("RA")):
+        heavy, light = t.startswith("+"), t.startswith("-")
+        if "SH" in t:
+            return 82 if heavy else 80 if light else 81
+        return 65 if heavy else 61 if light else 63
+    if (t := has("DZ")):
+        return 55 if t.startswith("+") else 51 if t.startswith("-") else 53
+    if any(t in ("FG", "FZFG") for t in tokens):
+        return 45
+    rank = {"FEW": 1, "SCT": 2, "BKN": 3, "OVC": 3, "OVX": 3}      # SKC/CLR/NSC/CAVOK = 0 (céu limpo)
+    covers = [c.get("cover") for c in (m.get("clouds") or [])] + [m.get("cover")]
+    return max((rank.get(c, 0) for c in covers), default=0)
+
+
+def _fetch_metar(lat: float, lon: float) -> dict | None:
+    """Boletim mais recente da estação configurada ou da mais próxima. None = nada aproveitável."""
+    base = "https://aviationweather.gov/api/data/metar?format=json&hours=3&"
+    if METAR_STATION:
+        url = base + urllib.parse.urlencode({"ids": METAR_STATION})
+    else:
+        d = 0.6   # ~65 km para cada lado; depois filtra por METAR_MAX_KM
+        url = base + urllib.parse.urlencode({"bbox": f"{lat - d:.3f},{lon - d:.3f},{lat + d:.3f},{lon + d:.3f}"})
+    rows = _http_json(url, timeout=8) or []
+    now = time.time()
+    best = None
+    for m in rows:
+        try:
+            km = _km(lat, lon, float(m["lat"]), float(m["lon"]))
+            age = (now - float(m["obsTime"])) / 60
+        except (KeyError, TypeError, ValueError):
+            continue
+        if age > METAR_MAX_AGE_MIN or (not METAR_STATION and km > METAR_MAX_KM):
+            continue
+        # a mais próxima; entre boletins da mesma estação, o mais novo
+        if best is None or (km, age) < (best["km"], best["age_min"]):
+            # "Rio de Janeiro/Dumont Arpt, RJ, BR" → "Dumont"; "Jacarepagua Arpt, RJ, BR" → "Jacarepagua"
+            short = _re.sub(r"\s+(Arpt|Airport|Intl|Aeroporto|AB)\b.*$", "", str(m.get("name") or "").split(",")[0]).split("/")[-1].strip()
+            best = {"station": m.get("icaoId"), "name": f"aeroporto {short} ({m.get('icaoId')})" if short else m.get("icaoId"),
+                    "km": round(km, 1), "age_min": round(age), "raw": m.get("rawOb", ""),
+                    "time": datetime.fromtimestamp(float(m["obsTime"])).strftime("%H:%M"),
+                    "obs_ts": float(m["obsTime"]), "code": _metar_code(m), "temp": m.get("temp"),
+                    "dewp": m.get("dewp")}
+    return best
+
+
+def _rh_from_dewpoint(t: float, td: float) -> float:
+    """Umidade relativa (%) a partir da temperatura e do ponto de orvalho (fórmula de Magnus)."""
+    import math
+    a, b = 17.625, 243.04
+    return max(1.0, min(100.0, 100 * math.exp(a * td / (b + td) - a * t / (b + t))))
+
+
+def _heat_index(t: float, rh: float) -> float:
+    """Sensação térmica no calor (índice de calor da NOAA, em °C). Abaixo de 27 °C a sensação = temperatura."""
+    if t < 27 or rh < 40:
+        return t
+    f = t * 9 / 5 + 32
+    hi = (-42.379 + 2.04901523 * f + 10.14333127 * rh - .22475541 * f * rh - .00683783 * f * f
+          - .05481717 * rh * rh + .00122874 * f * f * rh + .00085282 * f * rh * rh - .00000199 * f * f * rh * rh)
+    return (hi - 32) * 5 / 9
+
+
+def _sane_model_code(code: int, precip, clouds) -> int:
+    """Sem observação: não deixa o modelo pôr trovoada/chuva na tela quando ele mesmo prevê quase nada de chuva."""
+    if code >= 61 and (precip or 0) < MODEL_STORM_MIN_MM:
+        return 3 if (clouds or 0) >= 85 else 2
+    return code
+
+
+def _apply_observed(w: dict, lat, lon) -> None:
+    """Troca a condição atual do modelo pela observada (METAR). Guarda as duas para conferência."""
+    cur = w["current"]
+    cur["code_model"] = cur["code"]
+    obs = None
+    try:
+        obs = _fetch_metar(float(lat), float(lon))
+        if obs:
+            _metar_last["data"] = obs
+    except Exception as e:
+        print(f"[clima] METAR indisponível: {e}")
+    if not obs and _metar_last["data"]:           # sem internet agora: o último boletim ainda vale se for recente
+        last = _metar_last["data"]
+        age = (time.time() - last["obs_ts"]) / 60
+        if age <= METAR_MAX_AGE_MIN:
+            obs = dict(last, age_min=round(age))
+    if obs:
+        cur["code"] = obs["code"]
+        cur["source"] = "observado"
+        cur["obs"] = {k: obs.get(k) for k in ("station", "name", "km", "time", "age_min", "raw", "temp", "dewp")}
+        # Temperatura, umidade e sensação também observadas (pedido de 19/11/2026: o modelo dizia 29°, o
+        # aeroporto mediu 33°). A sensação é recalculada (índice de calor) porque a do modelo foi feita
+        # para a temperatura do modelo. O vento e a chance de chuva continuam do modelo.
+        if obs.get("temp") is not None:
+            t = float(obs["temp"])
+            cur["temp_model"], cur["humidity_model"], cur["feels_model"] = cur["temp"], cur["humidity"], cur["feels"]
+            cur["temp"] = t
+            if obs.get("dewp") is not None:
+                cur["humidity"] = round(_rh_from_dewpoint(t, float(obs["dewp"])))
+            cur["feels"] = round(_heat_index(t, cur["humidity"] or 0), 1)
+            today = (w.get("daily") or [None])[0]
+            if today:                                   # observado passou da máx./mín. prevista: o dia acompanha
+                if today.get("max") is not None and t > today["max"]:
+                    today["max"] = t
+                if today.get("min") is not None and t < today["min"]:
+                    today["min"] = t
+    else:
+        cur["code"] = _sane_model_code(cur["code"], cur.get("precip"), cur.get("clouds"))
+        cur["source"] = "modelo"
 
 
 def _build_weather(raw: dict, city: str) -> dict:
@@ -1773,6 +2303,7 @@ def _build_weather(raw: dict, city: str) -> dict:
             "gust": cur["wind_gusts_10m"],
             "is_day": cur["is_day"],
             "precip": cur["precipitation"],
+            "clouds": cur.get("cloud_cover"),
             "rain_prob": rain_now,
             "rain_prob_rest": max(rest) if rest else None,
         },
@@ -1834,6 +2365,7 @@ def get_weather(force: bool = False) -> dict:
         return _wx_cache["data"]
     try:
         w = _build_weather(_fetch_forecast(s["weather_lat"], s["weather_lon"]), s["weather_city"])
+        _apply_observed(w, s["weather_lat"], s["weather_lon"])   # condição atual = observada (METAR), 0.13.0
     except Exception as e:
         if _wx_cache["data"]:
             return _wx_cache["data"]
@@ -1890,6 +2422,13 @@ def _log_model_compare():
             c["time"].replace("T", " "), model, c["temperature_2m"], c["weather_code"], shown,
             WX_CODE_PT.get(shown, shown), c["precipitation"], c["cloud_cover"],
             c["relative_humidity_2m"])) + "\n")
+    # 0.13.0: o tempo OBSERVADO (METAR) entra como mais uma linha — é o "gabarito" para julgar os modelos.
+    obs = _metar_last["data"]
+    if obs and (time.time() - obs["obs_ts"]) / 60 <= METAR_MAX_AGE_MIN:
+        lines.append(";".join(str(v).replace(".", ",") if isinstance(v, float) else str(v) for v in (
+            datetime.fromtimestamp(obs["obs_ts"]).strftime("%Y-%m-%d %H:%M"), f"metar_{obs['station']}",
+            obs["temp"] if obs["temp"] is not None else "", obs["code"], obs["code"],
+            WX_CODE_PT.get(obs["code"], obs["code"]), "", "", "")) + "\n")
     new = not WX_COMPARE_FILE.exists()
     with open(WX_COMPARE_FILE, "a", encoding="utf-8-sig" if new else "utf-8") as f:
         if new:
@@ -1917,8 +2456,11 @@ def _warm_news():
     try:
         with db() as con:
             rows = con.execute("SELECT config FROM items WHERE type='news' AND active=1").fetchall()
-        for r in rows:
-            get_news(json.loads(r["config"] or "{}"), force=True)
+        cfgs = [json.loads(r["config"] or "{}") for r in rows]
+        for c in cfgs:
+            get_news(c, force=True)
+        if any(c.get("show_fx", True) for c in cfgs):
+            get_fx()          # cotação do rodapé já pronta quando a tela de notícias abrir
     except Exception as e:
         print(f"[notícias] falha ao atualizar em segundo plano: {e}")
 
@@ -2143,6 +2685,79 @@ show(); if (I.cards.length > 1) setInterval(show, {per_ms});
 </script>""")
 
 
+# Rodapé da cotação na tela de notícias (0.13.0). Fica ABAIXO da barra de tempo dos cards.
+# Strings comuns (não f-string) para não precisar dobrar as chaves; view_news() injeta as duas.
+# Cores: ▲ verde = dólar subiu no dia, ▼ vermelho = caiu (convenção de painel de cotação).
+NEWS_FX_CSS = """
+body.fx .card{bottom:21vh}
+body.fx .bottom{bottom:12.6vh}
+body.fx .summary{-webkit-line-clamp:3}
+.fx{position:fixed;left:0;right:0;bottom:0;height:9.6vh;display:flex;align-items:center;gap:2.4vw;padding:0 4vw;
+  background:linear-gradient(180deg,rgba(15,23,42,.55),rgba(15,23,42,.96));border-top:.2vh solid rgba(148,163,184,.18);
+  font-variant-numeric:tabular-nums;color:#cbd5e1}
+.fx[hidden],.fx .grp[hidden]{display:none}
+.fx .grp{display:flex;flex-direction:column;justify-content:center;gap:.5vh;white-space:nowrap}
+.fx .lbl{font-size:1.55vh;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#94a3b8}
+.fx .big{font-size:3.7vh;font-weight:700;color:#f8fafc;line-height:1}
+.fx .chg{font-size:2.7vh;font-weight:700;line-height:1}
+.fx .up{color:#4ade80}.fx .down{color:#f87171}.fx .flat{color:#94a3b8}
+.fx .mid{font-size:2.3vh;font-weight:600;color:#e2e8f0;line-height:1}
+.fx svg{display:block;width:15vw;height:3.9vh;overflow:visible}
+.fx .vsep{width:1px;align-self:stretch;margin:2.2vh 0;background:rgba(148,163,184,.25)}
+.fx .when{margin-left:auto;text-align:right;font-size:1.7vh;line-height:1.5;color:#94a3b8}
+"""
+NEWS_FX_HTML = """<div class="fx" id="fx" hidden>
+  <div class="grp"><span class="lbl">Dólar comercial</span><span class="big" id="fx-bid"></span></div>
+  <div class="grp"><span class="lbl" id="fx-chg-lbl">Hoje</span><span class="chg" id="fx-chg"></span></div>
+  <div class="grp" id="fx-spark-g"><span class="lbl">Últimos 30 dias</span><svg id="fx-spark"></svg></div>
+  <div class="grp"><span class="lbl">Mínima · Máxima do dia</span><span class="mid" id="fx-range"></span></div>
+  <div class="vsep"></div>
+  <div class="grp" id="fx-ptax-g"><span class="lbl" id="fx-ptax-lbl">PTAX venda · Banco Central</span><span class="mid" id="fx-ptax"></span></div>
+  <div class="when"><span id="fx-at"></span><br>AwesomeAPI · Banco Central</div>
+</div>"""
+NEWS_FX_JS = """
+// ─── Rodapé da cotação (0.13.0): desenha FX (vem embutido e é renovado de /api/fx a cada 1 min) ───
+// 2 casas decimais (R$ 5,91) em todos os valores do rodapé — pedido de 19/11/2026; para voltar a 4, troque d = 2 por d = 4
+const brl = (v, d = 2) => 'R$ ' + v.toLocaleString('pt-BR', {minimumFractionDigits: d, maximumFractionDigits: d});
+const ddmm = s => s.slice(8, 10) + '/' + s.slice(5, 7);
+function drawSpark(svg, pts, dotColor) {
+  const W = svg.clientWidth || 280, H = svg.clientHeight || 56, pad = 6;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if (!pts || pts.length < 2) { svg.innerHTML = ''; return false; }
+  const vs = pts.map(p => p.v), lo = Math.min(...vs), hi = Math.max(...vs), k = (H - 2 * pad) / ((hi - lo) || 1);
+  const xy = pts.map((p, i) => [pad + i * (W - 2 * pad) / (pts.length - 1), H - pad - (p.v - lo) * k]);
+  const line = 'M' + xy.map(q => q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join(' L');
+  const last = xy[xy.length - 1];
+  svg.innerHTML = `<defs><linearGradient id="fxg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="${ACC}" stop-opacity=".32"/><stop offset="1" stop-color="${ACC}" stop-opacity="0"/></linearGradient></defs>
+    <path d="${line} L${last[0].toFixed(1)} ${H} L${xy[0][0].toFixed(1)} ${H} Z" fill="url(#fxg)"/>
+    <path d="${line}" fill="none" stroke="${ACC}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${last[0]}" cy="${last[1]}" r="9" fill="${dotColor}" opacity=".25"><animate attributeName="r" values="6;12;6" dur="2.4s" repeatCount="indefinite"/></circle>
+    <circle cx="${last[0]}" cy="${last[1]}" r="5" fill="${dotColor}"/>`;
+  return true;
+}
+function drawFx() {
+  const ok = SHOW_FX && FX && FX.ok;
+  $('fx').hidden = !ok; document.body.classList.toggle('fx', !!ok);
+  if (!ok) return;
+  const p = FX.pct, cls = Math.abs(p) < 0.005 ? 'flat' : p > 0 ? 'up' : 'down';
+  $('fx-bid').textContent = brl(FX.bid);
+  $('fx-chg').className = 'chg ' + cls;
+  $('fx-chg').textContent = {flat: '■ ', up: '▲ ', down: '▼ '}[cls] +
+    Math.abs(p).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '%';
+  // fim de semana/feriado: a API devolve o último pregão — a etiqueta deixa isso claro
+  $('fx-chg-lbl').textContent = FX.today ? 'Variação hoje' : 'Pregão de ' + ddmm(FX.day);
+  $('fx-range').textContent = brl(FX.low) + '  ·  ' + brl(FX.high);
+  $('fx-spark-g').hidden = !drawSpark($('fx-spark'), FX.spark, {up: '#4ade80', down: '#f87171', flat: '#94a3b8'}[cls]);
+  $('fx-ptax-g').hidden = !FX.ptax;
+  if (FX.ptax) { $('fx-ptax-lbl').textContent = 'PTAX venda · BCB · ' + ddmm(FX.ptax.date); $('fx-ptax').textContent = brl(FX.ptax.sell); }
+  $('fx-at').textContent = 'Cotação das ' + FX.at;
+}
+drawFx();
+if (SHOW_FX) setInterval(async () => { try { FX = await (await fetch('/api/fx')).json(); drawFx(); } catch (e) {} }, 60000);
+"""
+
+
 @app.get("/view/news/{item_id}")
 def view_news(item_id: str):
     """Tela de notícias: uma manchete por vez (foto + título + resumo), trocando a cada
@@ -2154,7 +2769,7 @@ def view_news(item_id: str):
     data = json.dumps(get_news(cfg), ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(str(cfg.get("title") or "Notícias"))
     accent = _css_color(cfg.get("accent"), "#38bdf8")
-    per = _num(cfg.get("per_headline"), 9, 4, 60)
+    per = _num(cfg.get("per_headline"), NEWS_SECONDS_PER_CARD, 4, 120)   # padrão 30 s por card (0.13.0)
     show_img = "true" if cfg.get("show_images", True) else "false"
     # Logo Alava no cabeçalho (0.11.0; config.show_logo, ligado por padrão).
     # Usa assets/watermark.png (versão branca, fundo transparente): é a de melhor contraste
@@ -2162,6 +2777,11 @@ def view_news(item_id: str):
     # sumiriam no fundo escuro. Mesmo tamanho do logo das telas de clima e trânsito.
     logo = ('<img class="logo" src="/assets/watermark.png" alt="Alava"><span class="sep"></span>'
             if cfg.get("show_logo", True) else "")
+    # Rodapé com a cotação do dólar (config.show_fx, ligado por padrão). Sem dado (sem internet e sem
+    # cache), o rodapé some e o cartão volta a ocupar a tela toda.
+    show_fx = bool(cfg.get("show_fx", True))
+    fx_data = json.dumps(get_fx(), ensure_ascii=False) if show_fx else "null"
+    show_fx_js = "true" if show_fx else "false"
     return HTMLResponse(f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -2182,7 +2802,17 @@ html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5
 .card.out{{opacity:0}}
 .pic{{width:100%;height:100%;border-radius:2.2vh;background:#1e293b center/cover no-repeat;box-shadow:0 3vh 7vh rgba(0,0,0,.45)}}
 .card.noimg .pic{{display:none}}
+/* Matéria sem foto (0.13.0): fundo azul-escuro com a logo Alava no centro, no lugar de um quadro vazio */
+.pic.brand{{background:url('/assets/watermark.png') center/46% auto no-repeat,linear-gradient(135deg,#17325f,#0b1120 70%)}}
+/* Selo FONTE • CATEGORIA (0.13.0). Preferencial / foco contábil = selo cheio na cor de destaque;
+   as demais fontes = só contorno. Tamanho pensado para ler da outra ponta da sala. */
+.tag{{display:inline-block;max-width:100%;font-size:2.5vh;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  padding:.9vh 1.8vh;border-radius:1vh;border:.25vh solid {accent};color:{accent};margin-bottom:2vh;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.tag.pref{{background:{accent};color:#0b1120}}
+.tag[hidden]{{display:none}}
 .meta{{font-size:2.4vh;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:{accent};margin-bottom:2.6vh}}
+.meta:empty{{display:none}}
 .headline{{font-size:6vh;font-weight:700;line-height:1.14;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}}
 .card.noimg .headline{{font-size:7.6vh}}
 .summary{{margin-top:3vh;font-size:3vh;line-height:1.4;color:#cbd5e1;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}}
@@ -2191,15 +2821,18 @@ html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5
 .bar{{flex:1;height:.6vh;border-radius:1vh;background:rgba(148,163,184,.25);overflow:hidden}}
 .bar i{{display:block;height:100%;width:0;background:{accent}}}
 .empty{{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:4vh;color:#94a3b8;text-align:center}}
+{NEWS_FX_CSS}
 </style></head>
 <body>
 <div class="top"><div class="brand">{logo}<h1>{title}</h1></div><div class="clock" id="clock"></div></div>
 <div class="card" id="card"><div class="pic" id="pic"></div>
-  <div><div class="meta" id="meta"></div><div class="headline" id="headline"></div><div class="summary" id="summary"></div></div></div>
+  <div><div class="tag" id="tag" hidden></div><div class="meta" id="meta"></div><div class="headline" id="headline"></div><div class="summary" id="summary"></div></div></div>
 <div class="bottom"><span id="count"></span><div class="bar"><i id="bar"></i></div></div>
+{NEWS_FX_HTML}
 <script>
-let N = {data};
+let N = {data}, FX = {fx_data};
 const PER = {per} * 1000, SHOW_IMG = {show_img}, KEY = 'news-idx-{html.escape(item_id)}';
+const SHOW_FX = {show_fx_js}, ACC = '{accent}';
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
 function tick() {{ const d = new Date(); $('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()); }}
@@ -2210,7 +2843,7 @@ function ago(ts) {{
   if (m < 60) return m <= 1 ? 'agora' : `há ${{m}} min`;
   const h = Math.round(m / 60); return h < 24 ? `há ${{h}} h` : `há ${{Math.round(h / 24)}} d`;
 }}
-let idx = 0;
+let idx = 0, picToken = 0;
 try {{ idx = parseInt(localStorage.getItem(KEY)) || 0; }} catch (e) {{}}
 function show() {{
   const list = (N && N.items) || [];
@@ -2223,9 +2856,18 @@ function show() {{
   $('card').classList.add('out');
   setTimeout(() => {{
     const img = SHOW_IMG && it.image;
-    $('card').classList.toggle('noimg', !img);
+    // Sem foto na matéria: mostra o quadro com a logo Alava (.pic.brand) em vez de esconder a foto.
+    // Só some de vez se "Mostrar a foto" estiver desligado no item.
+    $('card').classList.toggle('noimg', !SHOW_IMG);
+    $('pic').classList.toggle('brand', SHOW_IMG && !it.image);
     $('pic').style.backgroundImage = img ? `url("${{it.image.replace(/"/g, '%22')}}")` : '';
-    $('meta').textContent = [it.source, ago(it.ts)].filter(Boolean).join('  ·  ');
+    // Foto que não carrega (site bloqueia ou saiu do ar): cai na logo Alava em vez de um quadro vazio.
+    const token = ++picToken;
+    if (img) {{ const t = new Image(); t.onerror = () => {{ if (token === picToken) {{ $('pic').style.backgroundImage = ''; $('pic').classList.add('brand'); }} }}; t.src = it.image; }}
+    // Selo "PORTAL CONTÁBEIS • TRIBUTÁRIO" quando a matéria tem categoria; senão, a linha de sempre.
+    const tag = it.category ? [it.source, it.category].filter(Boolean).join(' • ') : '';
+    $('tag').hidden = !tag; $('tag').textContent = tag; $('tag').classList.toggle('pref', !!it.preferred);
+    $('meta').textContent = tag ? ago(it.ts) : [it.source, ago(it.ts)].filter(Boolean).join('  ·  ');
     $('headline').textContent = it.title;
     $('summary').textContent = it.summary;
     $('count').textContent = `${{idx + 1}} / ${{list.length}}`;
@@ -2238,6 +2880,7 @@ function show() {{
 }}
 show(); setInterval(show, PER);
 setInterval(async () => {{ try {{ N = await (await fetch('/api/news/{html.escape(item_id)}')).json(); }} catch (e) {{}} }}, 300000);
+{NEWS_FX_JS}
 </script>
 </body></html>""", headers={"Cache-Control": "no-store"})
 

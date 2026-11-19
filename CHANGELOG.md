@@ -7,6 +7,46 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.13.0] — 2026-11-19
+#### Adicionado
+- **Notícias com foco contábil (Portal Contábeis).** Três feeds já vêm cadastrados e marcados como **Preferenciais** em itens de notícias novos: *Últimas notícias* (`/rss/conteudo/`, peso 10), *Notícias publicadas* (`/rss/noticias/`, peso 9) e *Legislações publicadas* (`/rss/legislacao/`, peso 10). Itens antigos continuam como estavam, e dá para ligar os feeds do Contábeis neles quando quiser.
+- **Prioridade por feed** no painel: cada fonte tem seletor **Alta / Normal / Baixa** (peso 10 / 5 / 2), selo "Preferencial · Foco Contábil", liga/desliga e **Testar feed** (lidas × aproveitáveis). "Outros feeds RSS" virou uma lista com as mesmas opções, em vez de uma caixa de texto.
+- **Fila ponderada:** com pelo menos um feed preferencial, 3 de cada 4 notícias vêm dos preferenciais (opções: só preferenciais, 75% ou 50%) e as demais completam a fila. Se um grupo acabar, o outro preenche.
+- **Palavras que sobem a matéria** (Receita Federal, Simples Nacional, IRPF, DCTFWeb, eSocial, Reforma Tributária, ICMS, SPED, prazo…), conferidas só no título e sem diferenciar acento. Até 4 letras vale como palavra inteira (assim "pis" não pega "pista"). Lista editável no painel.
+- **Deduplicação:** a mesma matéria vinda de mais de um feed (cerca de 70% do `/conteudo/` repete o `/noticias/`) aparece uma vez, ficando a cópia do feed de maior peso.
+- **Limite de idade** (padrão 30 dias, configurável; 0 = sem limite): o feed `/rss/legislacao/` do Contábeis está parado em 2020, então nenhum ato antigo entra na TV como novidade.
+- **Selo na TV** `FONTE • CATEGORIA` (ex.: *PORTAL CONTÁBEIS • TRIBUTÁRIO*), cheio para fonte preferencial e só contorno para as demais. Matéria sem foto mostra a **logo da Alava** num quadro azul-escuro, em vez de sumir com a imagem.
+- **Mais fontes contábeis**, testadas uma a uma antes de entrar (responde, tem matéria dos últimos dias e foto):
+  - **Preferenciais:** *Jornal Contábil* (peso 9), *CFC — Conselho Federal de Contabilidade* (9), *FENACON* (8) e *Portal Contábeis — Artigos* (8, vem desligado em itens novos).
+  - **Normais:** *ConJur — Tributário* (desligado em itens novos) e *Agência Brasil — Economia*.
+  - Em itens novos já vêm marcados o Contábeis (3 feeds), Jornal Contábil, CFC e FENACON, mais g1 Economia e Agência Brasil Economia como fontes gerais (a BBC deixou de ser marcada por padrão).
+- **As fontes se revezam na fila:** cada fonte entrega uma matéria por rodada, para uma que publica toda hora (o Contábeis, a cada 30 min) não ocupar todas as vagas.
+- **Fotos dos sites WordPress** (Jornal Contábil, CFC, FENACON, ConJur): a foto vem no `<content:encoded>`, que agora é lido (ignora emoji, avatar e pixel de rastreio). Se a foto de um site não carregar na TV, aparece a logo da Alava em vez de um quadro vazio.
+- **Cada card de notícia fica 30 segundos** por padrão (era 9 s).
+- **Um só campo de tempo no item de notícias:** o campo *Duração* some e o tempo na TV é calculado como *Segundos por card* × *Cards por vez* (padrão 30 s × 4 = 2 min). O painel mostra o total calculado. *Máximo de manchetes* passou a se chamar *Notícias na fila*. Itens antigos abrem com o mesmo tempo de antes (45 s com 9 s por manchete → 5 cards).
+- **Rodapé com a cotação do dólar** na tela de notícias, abaixo da barra de tempo dos cards: dólar comercial ao vivo (2 casas, ex.: R$ 5,91), variação do dia (▲ verde / ▼ vermelho), gráfico dos últimos 30 dias com o ponto de hoje se mexendo, mínima e máxima do dia e **PTAX de venda do Banco Central** (a taxa oficial usada na contabilidade).
+  - Fontes grátis, sem chave: AwesomeAPI (comercial) e Banco Central (PTAX). O servidor consulta no máximo a cada 2 min e a TV atualiza sozinha a cada 1 min (`GET /api/fx`).
+  - Fim de semana e feriado: a etiqueta mostra "Pregão de dd/mm". Sem internet: usa a última cotação salva (`data/fx_cache.json`); sem nenhum dado, o rodapé some e o cartão volta a ocupar a tela.
+  - Liga/desliga por item: *Mostrar a cotação do dólar no rodapé*.
+- **Cache em disco** (`data/news_cache.json`): se a internet cair, a TV continua com as últimas notícias lidas, mesmo depois de reiniciar o servidor. O tempo de cache vem de `NEWS_TTL` no `.env` (padrão 600 s = 10 min).
+- **Clima: a condição atual agora é a OBSERVADA, não a prevista.** O "agora" da Open-Meteo é uma estimativa do modelo: em 19/11, às 13h45, ele dizia *Trovoadas* (por isso o fundo de tempestade), enquanto os 5 aeroportos do Rio observavam poucas nuvens. Ícone, texto e fundo animado passam a vir do **METAR** (boletim oficial de tempo observado) do aeroporto mais próximo; para o escritório, Jacarepaguá (SBJR), a 1,9 km. O rodapé da tela diz a origem ("tempo observado em aeroporto Jacarepagua (SBJR) às 13:00").
+  - **Temperatura, umidade e sensação também observadas** (no teste: 33° medidos contra 29° do modelo). A umidade sai do ponto de orvalho do METAR e a sensação é recalculada pelo índice de calor. Se o observado passar da máxima prevista do dia, a máxima acompanha. Vento e chance de chuva continuam do modelo.
+  - Fixar a estação: `METAR_STATION=` no `.env`. Boletim com mais de 100 min ou sem internet: volta para o modelo, mas o modelo não pode mais mostrar trovoada/chuva quando ele mesmo prevê menos de 0,5 mm (vira nublado ou parcialmente nublado).
+  - A previsão de 7 dias, a chance de chuva e os alertas do INMET continuam iguais.
+  - `data/wx_compare.csv` ganhou a linha `metar_SBJR` (o tempo real), para servir de gabarito na comparação de modelos de 02/12.
+- **Chuva com cenário de dia e de noite** (antes era o mesmo céu cinza):
+  - **Dia, chuva fraca/moderada/pancadas:** céu com aberturas, sol furando as nuvens, gotas douradas perto do sol e arco-íris do lado oposto (mais forte de manhã e no fim da tarde). Chuva forte de dia continua com o céu fechado.
+  - **Noite:** azul-marinho, lua desfocada atrás das nuvens (some na chuva forte), gotas prateadas e o brilho laranja da cidade nas nuvens baixas.
+  - O ícone de chuva fraca/moderada mostra o sol (dia) ou a lua (noite) atrás da nuvem.
+  - Testar: `/view/weather?demo=rain&day=1`, `?demo=heavy&day=1`, `?demo=rain&day=0` (com `&hora=16:20` para mudar a posição do sol).
+#### Alterado
+- O resumo das notícias perde o rodapé "Leia mais em https://…" do Contábeis e o "O post … apareceu primeiro em …" dos sites WordPress.
+- Os feeds são baixados com um `User-Agent` de navegador compatível e espera máxima de 10 s por feed.
+- O botão **Testar feeds** agora baixa de verdade (não usa o cache) e mostra as contagens por fonte.
+- O player (`player.py`) não mudou: a tela de notícias é servida pelo servidor.
+#### Como reverter
+- `git checkout backup-antes-rss-contabeis-20261119 -- server.py static/index.html static/weather.html` (ou copie `backup_rss_20261119/`). Só o clima: `backup_clima_20261119/`. Itens salvos na 0.13.0 abrem normalmente na 0.12.0; os campos novos são ignorados.
+
 ### [0.12.0] — 2026-11-18
 #### Adicionado
 - **Botão de tema no topo do painel:** alterna entre 🖥 **Automático** (segue o tema do Windows, como antes), ☀ **Claro** e 🌙 **Escuro**.
