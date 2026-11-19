@@ -7,6 +7,20 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.14.0] — 2026-11-19
+#### Adicionado
+- **Botão "Atualizar sistema" no painel** (Configurações → 🔄 Sistema):
+  - **Verificar atualização** consulta o GitHub e lista o que há de novo (avisa se algum arquivo foi alterado à mão no computador da TV).
+  - **Atualizar agora** roda o `atualizar.bat`: fecha o servidor e a TV, baixa a versão nova, atualiza as bibliotecas e abre tudo de novo. O painel mostra "Atualizando…" e recarrega sozinho quando o servidor volta (cerca de 1 minuto).
+  - O resultado fica em `data/update.log` e aparece no painel em "Última atualização".
+  - `atualizar.bat auto` é o modo sem perguntas usado pelo botão (não para em nenhum `pause`). Dando dois cliques no .bat, funciona como antes.
+- **"Hoje é dia" com tempo por card:** cada card (data comemorativa, feriado, "faltam N dias") fica **30 s** por padrão (antes eram 8 s dentro de um item de 15 s, e dois cards trocavam rápido demais). O tempo do item na TV é calculado: segundos por card × cards de hoje. O campo *Duração* some nesse tipo, como nas notícias. As curiosidades automáticas (Configurações) também passaram a usar *Segundos por card*.
+- **Itens de notícias antigos** (salvos antes da 0.13.0) ganham sozinhos, na primeira vez que o servidor sobe, as fontes contábeis: Portal Contábeis (3 feeds), Jornal Contábil, CFC e FENACON. As fontes que eles já tinham continuam e viram as "gerais" da fila. Itens salvos pelo painel na 0.13.0 não são tocados.
+#### Corrigido
+- **Trânsito sem as linhas coloridas na TV.** Dentro da nossa página (iframe), o Waze não mostra o trânsito no Chrome do player porque o cookie e o reCAPTCHA dele são bloqueados como "de terceiros" (no painel aparecia porque o navegador de quem edita aceita). O player volta a abrir o **Waze direto**, com a faixa da Alava (logo, título e relógio) desenhada por cima. Essa correção era da 0.7.0, mas tinha ficado só na branch `fix/transito-waze-no-player` e nunca entrou na versão principal.
+#### Como reverter
+- `git checkout 66da439 -- server.py player.py static/index.html atualizar.bat` ou copie `backup_v0.13.0_20261119/`.
+
 ### [0.13.0] — 2026-11-19
 #### Adicionado
 - **Notícias com foco contábil (Portal Contábeis).** Três feeds já vêm cadastrados e marcados como **Preferenciais** em itens de notícias novos: *Últimas notícias* (`/rss/conteudo/`, peso 10), *Notícias publicadas* (`/rss/noticias/`, peso 9) e *Legislações publicadas* (`/rss/legislacao/`, peso 10). Itens antigos continuam como estavam, e dá para ligar os feeds do Contábeis neles quando quiser.

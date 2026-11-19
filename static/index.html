@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.13.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.14.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,6 +9,9 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.13.0 (antes do botão Atualizar sistema e do tempo por card no "Hoje é dia"):
+        git checkout 66da439 -- static/index.html server.py player.py atualizar.bat
+        (ou copie backup_v0.13.0_20261119/ por cima dos atuais)
     Para a 0.12.0 (antes da prioridade contábil nas notícias): git checkout backup-antes-rss-contabeis-20261119 -- static/index.html server.py
         (ou copie backup_rss_20261119/static/ e backup_rss_20261119/server.py por cima dos atuais)
     Para a 0.11.0 (antes do botão de tema): git checkout 6efc5ba -- static/index.html
@@ -53,6 +56,11 @@
                                      refreshVoiceOptions(), listenMsg() → POST /api/tts-preview
       buscar imagens na web ........ #img-picker, openImagePicker(), runImageSearch(), pickImage()
                                      → GET /api/image-search, POST /api/image-import (nome do item obrigatório)
+    Sistema: atualizar (0.14.0) .... #card-system (Configurações), loadSystemInfo() → GET /api/system/info[?check=1],
+                                     runUpdate() → POST /api/system/update, waitServerBack() (recarrega quando o "boot"
+                                     do servidor muda), #upd-overlay
+    "Hoje é dia": tempo (0.14.0) ... #f-today-per (segundos por card, config.per_card), todayHint() (cards de hoje × s);
+                                     Configurações: #s-today-dur → today_per_card. Campo Duração some (showCfgPanel)
     Pré-visualização ............... #pv-overlay, .pv-screen, .pv-media, openPreview(), fitFrame()
     Aba Programação (timeline) ..... #tab-schedule, objeto TL, loadTimeline(), renderTimeline()
       na TV agora / pular item ..... #now-card (#nc-*), #btn-skip, NOW, refreshNow() → GET /api/player/now,
@@ -545,7 +553,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('calendar')" id="nb-calendar"><span class="ic">▦</span> Calendário</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.13.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.14.0</div>
 </aside>
 
 <div class="main">
@@ -686,8 +694,30 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     </div>
   </div>
 
+  <!-- Tela de "atualizando" (0.14.0): fica até o servidor voltar e a página recarregar -->
+  <style>#upd-overlay:not([hidden]){display:flex}</style>
+  <div id="upd-overlay" hidden style="position:fixed;inset:0;z-index:9999;background:rgba(5,8,15,.82);
+    align-items:center;justify-content:center;color:#fff;text-align:center;padding:24px">
+    <div><div style="font-size:42px">🔄</div><div style="font-size:20px;font-weight:700;margin:10px 0 6px">Atualizando o Alava Vision…</div>
+      <div id="upd-msg" style="opacity:.8;font-size:14px;max-width:460px">Baixando a versão nova e reiniciando o servidor e a TV.
+        Esta página recarrega sozinha quando terminar.</div></div>
+  </div>
+
   <!-- ═══ Aba Configurações ═══ -->
   <div class="content" id="tab-settings" hidden>
+    <!-- Sistema: versão e atualização pelo painel (0.14.0) -->
+    <div class="card" id="card-system" style="margin-bottom:16px">
+      <div class="section-title">🔄 Sistema</div>
+      <p class="hint" id="sys-version">Carregando…</p>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-ghost" id="btn-sys-check" onclick="loadSystemInfo(true)">Verificar atualização</button>
+        <button class="btn btn-primary" id="btn-sys-update" onclick="runUpdate()">Atualizar agora</button>
+        <span class="hint">Baixa a versão nova do GitHub e reinicia o servidor e a TV (a tela fica fora do ar por cerca de 1 minuto).</span>
+      </div>
+      <pre class="news-test" id="sys-news" style="margin-top:10px" hidden></pre>
+      <details style="margin-top:10px" id="sys-log-box" hidden><summary class="hint" style="cursor:pointer" id="sys-log-title">Última atualização</summary>
+        <pre class="news-test" id="sys-log" style="margin-top:6px;max-height:260px;overflow:auto"></pre></details>
+    </div>
     <div class="card">
       <div class="section-title">Clima e localização</div>
       <div class="settings-grid">
@@ -728,7 +758,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
         <div class="form-group"><label for="s-today-start">Das</label><input type="time" id="s-today-start" value="08:00"></div>
         <div class="form-group"><label for="s-today-end">Até</label><input type="time" id="s-today-end" value="18:00"></div>
         <div class="form-group"><label for="s-today-every">A cada (minutos)</label><input type="number" id="s-today-every" value="30" min="5" max="240"></div>
-        <div class="form-group"><label for="s-today-dur">Tempo na tela (segundos)</label><input type="number" id="s-today-dur" value="15" min="5" max="120"></div>
+        <div class="form-group"><label for="s-today-dur">Segundos por card</label><input type="number" id="s-today-dur" value="30" min="5" max="120"></div>
       </div>
       <p class="hint" style="margin-top:6px">Ligado, a TV intercala a tela de curiosidades na playlist que estiver no ar (não interrompe um item avulso agendado).
         Em dia sem data cadastrada nem feriado próximo, nada aparece. Também dá para pôr o item <b>📅 Hoje é dia</b> numa playlist.</p>
@@ -861,6 +891,11 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
       </div>
 
       <div id="cfg-today" hidden>
+        <div class="row3" style="margin-bottom:10px">
+          <div class="form-group"><label for="f-today-per">Segundos por card</label>
+            <input type="number" id="f-today-per" value="30" min="5" max="120" oninput="todayHint()"></div>
+        </div>
+        <p class="hint" id="today-dur-hint" style="margin-bottom:10px"></p>
         <p class="hint" style="color:var(--soft)">Mostra as datas comemorativas de hoje ("Hoje é Dia do Professor"), o feriado do dia
           e quantos dias faltam para o próximo feriado. Em dia sem nada para mostrar, a TV pula este item sozinha.<br><br>
           A lista de datas e as <b>curiosidades automáticas durante o horário de serviço</b> ficam em
@@ -1460,6 +1495,7 @@ function openEdit(id) {
   }
   if (item.type === 'message') setMsgForm(c);
   if (item.type === 'news') setNewsForm(c, item.duration);
+  if (item.type === 'today') { $('f-today-per').value = c.per_card || TODAY_SECONDS_PER_CARD; todayHint(); }
   if (c.notice) setNoticeFromItem(item);
   $('modal').hidden = false;
   if (item.type === 'message') msgPreviewSoon();
@@ -1543,6 +1579,19 @@ function rowInfo(row) {
   return {url, custom, on: row.querySelector('[data-on]').checked, w: prioOf(w0) === p ? w0 : PRIO_W[p]};
 }
 const feedRows = () => [...document.querySelectorAll('#feed-list .feed-row, #custom-feeds .feed-row')].map(rowInfo).filter(r => r.url);
+
+// ─── "Hoje é dia" (0.14.0): segundos por card; o item fica (por card × cards de hoje) na TV ─────
+const TODAY_SECONDS_PER_CARD = 30;   // igual ao TODAY_SECONDS_PER_CARD do server.py e do player.py
+const todayPer = () => Math.min(120, Math.max(5, parseInt($('f-today-per').value) || TODAY_SECONDS_PER_CARD));
+let todayCards = null;
+async function todayHint() {
+  const per = todayPer();
+  if (todayCards === null) { try { todayCards = (await api('GET', '/api/today')).cards.length; } catch(e) { todayCards = 0; } }
+  const n = todayCards, tot = per * Math.max(1, n);
+  $('today-dur-hint').textContent = n
+    ? `Hoje há ${n} card(s): o item fica ${tot >= 60 ? Math.floor(tot / 60) + ' min' + (tot % 60 ? ' ' + tot % 60 + ' s' : '') : tot + ' s'} na TV (cada card ${per} s).`
+    : `Cada card fica ${per} s. Hoje não há data para mostrar: a TV pula este item sozinha.`;
+}
 
 // Tempo do item de notícias na TV = segundos por card × cards por vez (é o que vai para "duration" do item).
 function newsDuration() {
@@ -1812,7 +1861,8 @@ function setType(t) {
 function showCfgPanel(t) {
   ALL_TYPES.forEach(x => $(`cfg-${x}`).hidden = x !== t);
   // Notícias (0.13.0): o tempo é "Segundos por card" × "Cards por vez" (newsDuration()); o campo Duração some.
-  $('grp-duration').hidden = t === 'news';
+  $('grp-duration').hidden = t === 'news' || t === 'today';   // "Hoje é dia" (0.14.0): tempo = por card × cards de hoje
+  if (t === 'today') todayHint();
 }
 
 function normalizeUrl(u) { u = u.trim(); return u && !/^https?:\/\//i.test(u) ? 'https://' + u : u; }
@@ -1825,7 +1875,8 @@ function previewUrlField() {
 
 async function saveItem(dup) {   // dup = "Salvar e duplicar": salva e abre a cópia para editar
   const name = $('f-name').value.trim();
-  const duration = currentType === 'news' ? newsDuration() : (parseInt($('f-duration').value) || 30);
+  const duration = currentType === 'news' ? newsDuration() : currentType === 'today' ? todayPer()
+    : (parseInt($('f-duration').value) || 30);
   if (!name) { status('Informe um nome', 'err'); return; }
   let config = {};
   if (currentType === 'url') {
@@ -1837,6 +1888,8 @@ async function saveItem(dup) {   // dup = "Salvar e duplicar": salva e abre a c�
     else if (editId) config = {...(itemById(editId)?.config || {})};
     else { status('Selecione um arquivo', 'err'); return; }
     if (currentType === 'video') config.loop = $('f-vid-loop').checked;
+  } else if (currentType === 'today') {
+    config = {per_card: todayPer()};           // o player calcula o tempo: por card × cards do dia
   } else if (currentType === 'news') {
     config = getNewsConfig();
     if (!config.feeds.length) { status('Escolha pelo menos uma fonte de notícias', 'err'); return; }
@@ -2788,9 +2841,10 @@ async function loadSettings() {
   $('s-today-start').value = s.today_start || '08:00';
   $('s-today-end').value = s.today_end || '18:00';
   $('s-today-every').value = s.today_every || 30;
-  $('s-today-dur').value = s.today_duration || 15;
+  $('s-today-dur').value = s.today_per_card || TODAY_SECONDS_PER_CARD;   // 0.14.0: por card (antes: tempo total)
   try { $('s-curio').value = (await api('GET', '/api/curiosities')).text; } catch(e) {}
   showVoiceStatus();
+  loadSystemInfo(false);
   // Atalhos de crepúsculo/amanhecer: simulam o horário (?hora=) a partir do pôr/nascer do sol de hoje.
   try {
     const w = await api('GET', '/api/weather');
@@ -2809,10 +2863,68 @@ async function saveSettings() {
       ibge_code: $('s-ibge').value.trim(),
       today_auto: $('s-today-auto').checked ? '1' : '0',
       today_start: $('s-today-start').value || '08:00', today_end: $('s-today-end').value || '18:00',
-      today_every: parseInt($('s-today-every').value) || 30, today_duration: parseInt($('s-today-dur').value) || 15,
+      today_every: parseInt($('s-today-every').value) || 30, today_per_card: parseInt($('s-today-dur').value) || TODAY_SECONDS_PER_CARD,
     });
     status('Configurações salvas');
   } catch(e) { status('Erro ao salvar: ' + e.message, 'err'); }
+}
+
+// ─── Sistema: atualizar pelo painel (0.14.0) ──────────────────────────────────
+// Verificar = git fetch no servidor (mostra o que há de novo). Atualizar = roda o atualizar.bat (modo auto):
+// fecha servidor/TV, git pull, reabre. O painel espera o servidor voltar com outro "boot" e recarrega.
+let sysBoot = null;
+async function loadSystemInfo(check) {
+  const b = $('btn-sys-check');
+  if (check) { b.disabled = true; b.textContent = 'Verificando…'; }
+  try {
+    const s = await api('GET', '/api/system/info' + (check ? '?check=1' : ''));
+    sysBoot = s.boot;
+    $('sys-version').innerHTML = `Versão instalada: <b>${esc(s.version)}</b>` +
+      (s.commit ? ` · commit <code>${esc(s.commit)}</code> de ${esc(s.commit_date || '')}` : '') +
+      (s.updating ? ' · <b>atualização em andamento…</b>' : '');
+    const box = $('sys-news');
+    if (check) {
+      box.hidden = false;
+      box.textContent = s.check_error ? '⚠ Não consegui consultar o GitHub: ' + s.check_error
+        : s.behind ? `✔ Há ${s.behind} novidade(s) para instalar:\n` + s.news.map(l => '• ' + l.replace(/^\w+ /, '')).join('\n')
+        : '✔ Já está na versão mais nova.';
+      if (s.dirty && s.dirty.length) box.textContent += '\n⚠ Arquivos alterados à mão neste computador (a atualização pode falhar):\n' + s.dirty.join('\n');
+    }
+    if (s.last_update) {
+      $('sys-log-box').hidden = false;
+      $('sys-log-title').textContent = `Última atualização pelo painel: ${s.last_update.at}`;
+      $('sys-log').textContent = s.last_update.log.join('\n');
+    }
+    $('btn-sys-update').disabled = !!s.updating || !s.windows;
+    if (!s.windows) $('btn-sys-update').title = 'Só funciona no computador da TV (Windows)';
+  } catch(e) { $('sys-version').textContent = '⚠ ' + e.message; }
+  finally { if (check) { b.disabled = false; b.textContent = 'Verificar atualização'; } }
+}
+async function runUpdate() {
+  if (!confirm('Atualizar o Alava Vision agora?\n\nO servidor e a TV vão fechar, baixar a versão nova do GitHub e abrir de novo.\nA tela da TV fica fora do ar por cerca de 1 minuto.')) return;
+  try {
+    const r = await api('POST', '/api/system/update');
+    sysBoot = r.boot || sysBoot;
+  } catch(e) { status('Não foi possível atualizar: ' + e.message, 'err'); return; }
+  $('upd-overlay').hidden = false;
+  waitServerBack(Date.now());
+}
+// Pergunta ao servidor a cada 3 s. Quando responder com outro "boot", ele reiniciou: recarrega a página.
+async function waitServerBack(t0) {
+  const secs = Math.round((Date.now() - t0) / 1000);
+  try {
+    const s = await api('GET', '/api/system/info');
+    if (s.boot !== sysBoot) { $('upd-msg').textContent = 'Pronto! Recarregando…'; setTimeout(() => location.reload(), 1200); return; }
+    $('upd-msg').textContent = `Baixando a versão nova e reiniciando… (${secs} s)`;
+  } catch(e) {
+    $('upd-msg').textContent = `Reiniciando o servidor… (${secs} s). Esta página recarrega sozinha.`;
+  }
+  if (secs > 300) {
+    $('upd-msg').innerHTML = 'O servidor ainda não voltou depois de 5 minutos.<br>Confira o computador da TV (janela "Alava Vision") ' +
+      'ou rode o <b>iniciar_alava_vision.bat</b>. <a href="" style="color:#7cc4ff">Tentar recarregar</a>';
+    return;
+  }
+  setTimeout(() => waitServerBack(t0), 3000);
 }
 
 async function showVoiceStatus() {

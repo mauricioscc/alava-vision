@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.13.0
+Alava Vision — Servidor (server.py) · versão 0.14.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -16,6 +16,9 @@ COMO RODAR
         http://localhost:8080/view/countdown/<id_do_item>  → contador regressivo de um item
         http://localhost:8080/view/html/<id_do_item>       → página HTML local de um item
         http://localhost:8080/view/message-preview?c={"text":"Oi","bg_mode":"gradient"}  → prévia de mensagem
+        http://localhost:8080/api/system/info?check=1 → versão instalada e se há atualização no GitHub (pede login)
+        http://localhost:8080/api/traffic       → como o player abre o trânsito (Waze direto + faixa da Alava)
+        http://localhost:8080/view/today?per=30 → "Hoje é dia" com 30 s por card
         http://localhost:8080/api/fx            → cotação do dólar do rodapé das notícias (comercial, 30 dias, PTAX)
         http://localhost:8080/api/news/<id_do_item_de_noticias>  → fila de notícias já ordenada (JSON; cada item
                                   traz source, category, preferred, weight). Ver "Notícias" no MAPA DO CÓDIGO.
@@ -47,6 +50,9 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.13.0 (antes do botão Atualizar, do trânsito no player e do tempo por card no "Hoje é dia"):
+        git checkout 66da439 -- server.py player.py static/index.html atualizar.bat
+        ou copie backup_v0.13.0_20261119/ (inclui o banco) por cima dos atuais.
     Para a 0.12.0 (antes da prioridade contábil nas notícias):
         git checkout main -- server.py static/index.html     (ou a tag backup-antes-rss-contabeis-20261119)
         ou copie backup_rss_20261119/server.py e backup_rss_20261119/static/ por cima dos atuais.
@@ -72,6 +78,8 @@ MAPA DO CÓDIGO
     Configuração (.env) ............. constantes logo abaixo dos imports
     Banco e migração ................ db(), init_db()
     Autenticação .................... require_auth(), GET /api/ping
+    Atualizar pelo painel (0.14.0) .. GET /api/system/info, POST /api/system/update (roda atualizar.bat auto fora da
+                                      árvore de processos do servidor), _git(), UPDATE_LOG/UPDATE_LOCK, _BOOT_ID
     Playlists ....................... GET/POST /api/playlists, PUT/DELETE /api/playlists/{id},
                                       POST /api/playlists/{id}/duplicate (cópia com todos os itens)
     Itens ........................... GET /api/playlist, POST /api/items,
@@ -111,12 +119,14 @@ MAPA DO CÓDIGO
                                       a trava _sane_model_code(). current.*_model = o que o modelo dizia.
       comparação de modelos ......... _log_model_compare() → data/wx_compare.csv (WX_COMPARE no .env)
     Telas exibidas pelo player ...... /view/image/{id}, /view/video/{id}, /view/weather,
-                                      /view/traffic, /view/message/{id},
+                                      /view/traffic (prévia; na TV o player abre o Waze direto: traffic_embed(),
+                                      GET /api/traffic), /view/message/{id},
                                       /view/html/{id} (redireciona para /html/...), /view/countdown/{id}
       vídeo repetir ou não .......... view_video(): config.loop (padrão True)
       notícias (RSS) ................ /view/news/{id} (logo Alava no cabeçalho: config.show_logo, .top .logo), GET /api/news/{id}, POST /api/news-test,
                                       get_news() (filtro, sem repetidas), _fetch_feed() (cache NEWS_TTL),
                                       _parse_feed() (RSS e Atom), _warm_news() (em 2º plano, com o clima)
+        itens antigos (0.14.0) ........ _migrate_news_sources() no startup(): ganham NEWS_MIGRATE_FEEDS uma vez
         prioridade contábil (0.13.0) . get_news() → _feed_weight() (peso por feed), _boost_hits() (palavras-chave),
                                       _news_dedupe_key() (mesma matéria em /conteudo e /noticias), _interleave()
                                       (fila ponderada: 3 de cada 4 vêm de feed preferencial); cada item sai com
@@ -161,7 +171,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 
 load_dotenv()
 
@@ -303,6 +313,90 @@ def require_auth(creds: HTTPBasicCredentials = Depends(security)):
 @app.get("/api/ping", dependencies=[Depends(require_auth)])
 def ping():
     return {"ok": True, "version": __version__}
+
+
+# ─── Atualizar o sistema pelo painel (0.14.0) ────────────────────────────────
+#
+# Configurações → Sistema → "Verificar atualização" / "Atualizar agora".
+#   GET  /api/system/info?check=1 → versão, commit, se há versão nova no GitHub (git fetch) e o log da última
+#                                   atualização (data/update.log).
+#   POST /api/system/update       → roda atualizar.bat auto: fecha servidor/player/Chrome da TV, git pull, pip,
+#                                   abre tudo de novo (iniciar_alava_vision.bat). O painel recarrega sozinho
+#                                   quando o servidor volta (muda o "boot").
+# Pegadinha: o atualizar.bat FECHA este servidor (taskkill /T, que mata a árvore de processos). Se o servidor
+# abrisse o .bat como filho, o .bat morreria junto. Por isso ele é lançado por "cmd /c start …": o cmd
+# intermediário termina na hora e o atualizador fica sem "pai", fora da árvore do servidor.
+# Só funciona no Windows (onde a TV roda) e só para quem está logado no painel.
+_BOOT_ID = f"{time.time():.0f}"            # muda a cada vez que o servidor sobe
+UPDATE_LOG = DATA_DIR / "update.log"
+UPDATE_LOCK = DATA_DIR / "update.lock"     # evita dois cliques seguidos; apagado quando o servidor volta
+UPDATE_LOCK_MAX = 600                      # trava mais velha que 10 min é ignorada (atualização que falhou no meio)
+
+
+def _git(*args: str, timeout: float = 25) -> tuple[int, str, str]:
+    import subprocess
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")     # nunca fica esperando senha
+    try:
+        r = subprocess.run(["git", *args], cwd=str(BASE), capture_output=True, timeout=timeout, env=env,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except FileNotFoundError:
+        return 127, "", "git não encontrado neste computador"
+    except subprocess.TimeoutExpired:
+        return 124, "", "o git demorou demais (sem internet?)"
+    dec = lambda b: (b or b"").decode("utf-8", "replace").strip()
+    return r.returncode, dec(r.stdout), dec(r.stderr)
+
+
+def _update_running() -> bool:
+    try:
+        return time.time() - UPDATE_LOCK.stat().st_mtime < UPDATE_LOCK_MAX
+    except OSError:
+        return False
+
+
+@app.get("/api/system/info", dependencies=[Depends(require_auth)])
+def api_system_info(check: bool = False):
+    info = {"version": __version__, "boot": _BOOT_ID, "updating": _update_running(), "windows": os.name == "nt"}
+    rc, out, _ = _git("log", "-1", "--format=%h|%cd", "--date=format:%d/%m/%Y %H:%M")
+    if rc == 0 and "|" in out:
+        info["commit"], info["commit_date"] = out.split("|", 1)
+    if check:
+        rc, _, err = _git("fetch", "--quiet", timeout=45)
+        if rc != 0:
+            info["check_error"] = (err.splitlines() or ["falha no git fetch"])[-1][:200]
+        else:
+            rc, cnt, _ = _git("rev-list", "--count", "HEAD..@{u}")
+            info["behind"] = int(cnt) if rc == 0 and cnt.isdigit() else 0
+            _, log, _ = _git("log", "--oneline", "--no-merges", "-15", "HEAD..@{u}")
+            info["news"] = [l for l in log.splitlines() if l.strip()]
+        _, dirty, _ = _git("status", "--porcelain", "--untracked-files=no")
+        info["dirty"] = [l for l in dirty.splitlines() if l.strip()][:10]   # arquivos mexidos à mão: o pull pode falhar
+    try:
+        lines = UPDATE_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+        info["last_update"] = {"at": datetime.fromtimestamp(UPDATE_LOG.stat().st_mtime).strftime("%d/%m/%Y %H:%M"),
+                               "log": [l for l in lines if l.strip()][-30:]}
+    except OSError:
+        pass
+    return info
+
+
+@app.post("/api/system/update", dependencies=[Depends(require_auth)])
+def api_system_update():
+    import subprocess
+    if os.name != "nt":
+        raise HTTPException(501, "A atualização pelo painel só funciona no Windows (computador da TV).")
+    bat = BASE / "atualizar.bat"
+    if not bat.exists():
+        raise HTTPException(404, "atualizar.bat não encontrado na pasta do sistema.")
+    if _update_running():
+        raise HTTPException(409, "Já existe uma atualização em andamento.")
+    UPDATE_LOCK.write_text(datetime.now().isoformat(), encoding="utf-8")
+    # start "título" /min cmd /c ""<bat>" auto > "<log>" 2>&1"  — janela minimizada, saída no data\update.log
+    inner = f'""{bat}" auto > "{UPDATE_LOG}" 2>&1"'
+    subprocess.Popen(f'cmd /c start "Alava Vision - Atualizar" /min cmd /c {inner}', cwd=str(BASE),
+                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS, close_fds=True)
+    print("[sistema] atualização pedida pelo painel — o servidor vai reiniciar")
+    return {"ok": True, "boot": _BOOT_ID}
 
 
 # ─── Playlists ────────────────────────────────────────────────────────────────
@@ -1496,6 +1590,37 @@ def _try(fn, *a):
         return e
 
 
+# Fontes contábeis que os itens de notícias ANTIGOS ganham (0.14.0, pedido de 19/11/2026).
+NEWS_MIGRATE_FEEDS = ("https://www.contabeis.com.br/rss/conteudo/", "https://www.contabeis.com.br/rss/noticias/",
+                      "https://www.contabeis.com.br/rss/legislacao/", "https://www.jornalcontabil.com.br/feed/",
+                      "https://www.cfc.org.br/feed/", "https://www.fenacon.org.br/feed/")
+
+
+def _migrate_news_sources() -> int:
+    """Roda a cada início do servidor, mas só age uma vez por item: itens de notícias salvos ANTES da 0.13.0
+    (sem config.weights) ganham as fontes contábeis acima, mantendo as que já tinham (que viram as fontes
+    "gerais" da fila 3:1). Grava os pesos, então na próxima vez o item é reconhecido como já migrado.
+    Item salvo pelo painel na 0.13.0+ já tem pesos: as fontes escolhidas ali não são tocadas.
+    Tempo por card e quantidade de cards não mudam (o item continua com o tempo que tinha)."""
+    n = 0
+    try:
+        with db() as con:
+            for r in con.execute("SELECT id, name, config FROM items WHERE type='news'").fetchall():
+                cfg = json.loads(r["config"] or "{}")
+                if isinstance(cfg.get("weights"), dict):
+                    continue
+                feeds = [u for u in (cfg.get("feeds") or []) if isinstance(u, str)]
+                feeds += [u for u in NEWS_MIGRATE_FEEDS if u not in feeds]
+                cfg["feeds"] = feeds[:12]                       # get_news() lê no máximo 12
+                cfg["weights"] = {u: _feed_weight(u, cfg) for u in cfg["feeds"]}
+                con.execute("UPDATE items SET config=? WHERE id=?", (json.dumps(cfg, ensure_ascii=False), r["id"]))
+                n += 1
+                print(f"[notícias] item antigo '{r['name']}' ganhou as fontes contábeis ({len(cfg['feeds'])} fontes)")
+    except Exception as e:
+        print(f"[notícias] não consegui atualizar os itens antigos: {e}")
+    return n
+
+
 @app.get("/api/news/{item_id}")
 def api_news(item_id: str):
     return get_news(_item_config(item_id))
@@ -1767,9 +1892,19 @@ def today_info(day=None) -> dict:
 def today_auto_settings() -> dict:
     """Curiosidades automáticas (Configurações): o player intercala a tela /view/today na playlist."""
     s = load_settings()
+    per = _num(s.get("today_per_card"), TODAY_SECONDS_PER_CARD, 5, 120)
     return {"enabled": s.get("today_auto") == "1", "start": s.get("today_start") or "08:00",
             "end": s.get("today_end") or "18:00", "every_min": _num(s.get("today_every"), 30, 5, 240),
-            "duration": _num(s.get("today_duration"), 15, 5, 120)}
+            # 0.14.0: tempo POR CARD (o player multiplica pela quantidade de cards do dia).
+            # "duration" fica para players antigos (0.13.0), que ainda leem o tempo total.
+            "per_card": per, "duration": _num(s.get("today_duration"), 15, 5, 120)}
+
+
+# "Hoje é dia" (0.14.0): cada card (data comemorativa, feriado, "faltam N dias") fica este tempo na tela.
+# Antes eram 8 s fixos dentro de um item de 15 s: em dia com 2 cards, eles trocavam rápido demais.
+# Por item: config.per_card. Curiosidades automáticas: Configurações → today_per_card.
+# O tempo do item na TV = segundos por card × cards de hoje (calculado no player, ver run()).
+TODAY_SECONDS_PER_CARD = 30
 
 
 # ─── Avisos por data (0.11.0) ─────────────────────────────────────────────────
@@ -2607,21 +2742,47 @@ def view_weather():
     return HTMLResponse(page.replace(WX_DATA_MARK, data, 1), headers={"Cache-Control": "no-store"})
 
 
+def traffic_embed(s: dict) -> tuple[str, bool]:
+    """Endereço do mapa de trânsito e se o player deve abri-lo DIRETO (fora da nossa página).
+
+    Waze → direto (True). Dentro de um iframe de outro endereço, o Chrome trata o Waze como
+    conteúdo de terceiros: bloqueia o cookie de visitante e o reCAPTCHA dele, e o Waze deixa
+    de enviar os dados de trânsito (o mapa aparece SEM as linhas coloridas — era o defeito da TV).
+    No painel funciona porque o navegador de quem edita aceita esses cookies. Aberto como página
+    principal, funciona também na TV; o player desenha por cima a faixa da Alava
+    (player.py → TRAFFIC_BAND_JS).
+    Google Maps (com MAPS_API_KEY) → dentro da nossa página (False): a API de incorporação funciona em iframe.
+
+    Histórico: corrigido na 0.7.0, mas a correção ficou só na branch fix/transito-waze-no-player e
+    nunca entrou na main. Portada para a 0.14.0.
+    """
+    lat, lon, maps_key = s["weather_lat"], s["weather_lon"], s["maps_api_key"]
+    if maps_key:
+        return f"https://www.google.com/maps/embed/v1/view?key={maps_key}&center={lat},{lon}&zoom=13&maptype=roadmap", False
+    return f"https://embed.waze.com/iframe?zoom=14&lat={lat}&lon={lon}&ct=livemap&pin=1", True
+
+
+@app.get("/api/traffic")
+def api_traffic():
+    """Usado pelo player para decidir como abrir o item de trânsito."""
+    s = load_settings()
+    url, direct = traffic_embed(s)
+    city = (s["weather_city"] or "").strip()
+    return {"url": url, "direct": direct, "title": "Trânsito agora" + (f" · {city}" if city else "")}
+
+
 @app.get("/view/traffic")
 def view_traffic():
     """Mapa de trânsito com uma faixa no topo: logo Alava à esquerda, título e relógio à direita.
 
+    Usada na pré-visualização do painel e, com Google Maps, também na TV. Com Waze, a TV abre
+    o Waze direto (ver traffic_embed); a faixa desenhada pelo player tem o mesmo visual desta.
     O logo fica na faixa (e não por cima do mapa) porque o canto superior esquerdo do Waze
-    e do Google Maps já tem a busca/cartão do próprio mapa. A faixa mantém o logo no mesmo
-    lugar e tamanho da tela de clima (canto superior esquerdo, 4,2% da altura).
+    e do Google Maps já tem a busca/cartão do próprio mapa.
     """
     s = load_settings()
-    lat, lon, maps_key = s["weather_lat"], s["weather_lon"], s["maps_api_key"]
+    src, _ = traffic_embed(s)
     city = html.escape(s["weather_city"] or "")
-    if maps_key:
-        src = f"https://www.google.com/maps/embed/v1/view?key={maps_key}&center={lat},{lon}&zoom=13&maptype=roadmap"
-    else:
-        src = f"https://embed.waze.com/iframe?zoom=14&lat={lat}&lon={lon}&ct=livemap&pin=1"
     return view_html(f"""
 <div style="position:fixed;inset:0;display:flex;flex-direction:column;background:#0b1220">
   <header style="height:9vh;flex:none;display:flex;align-items:center;justify-content:space-between;
@@ -2645,11 +2806,12 @@ tick(); setInterval(tick, 1000);
 @app.get("/view/today")
 def view_today(d: str | None = None, per: int = 0):
     """Tela "Hoje é Dia de…". Vários cartões no dia: troca entre eles a cada `per` segundos
-    (padrão: 8). `?d=AAAA-MM-DD` mostra outro dia, para testar pelo painel.
+    (padrão: TODAY_SECONDS_PER_CARD = 30 s; o player manda ?per= com o valor do item ou das
+    Configurações). `?d=AAAA-MM-DD` mostra outro dia, para testar pelo painel.
     """
     info = api_today(d)
     data = json.dumps(info, ensure_ascii=False).replace("</", "<\\/")
-    per_ms = _num(per, 8, 3, 60) * 1000
+    per_ms = _num(per, TODAY_SECONDS_PER_CARD, 3, 120) * 1000
     return view_html(f"""
 <style>
   .td{{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
@@ -3007,6 +3169,8 @@ def admin():
 @app.on_event("startup")
 def startup():
     init_db()
+    UPDATE_LOCK.unlink(missing_ok=True)        # servidor voltou: a atualização (se havia) terminou
+    _migrate_news_sources()                    # 0.14.0: itens de notícias antigos ganham as fontes contábeis
     threading.Thread(target=_weather_refresher, name="clima", daemon=True).start()
     print(f"\n✅ Alava Vision {__version__} rodando em http://0.0.0.0:{PORT}/")
     print(f"   Login: {ADMIN_USER} / {ADMIN_PASSWORD}\n")

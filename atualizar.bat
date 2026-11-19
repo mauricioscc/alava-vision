@@ -1,6 +1,6 @@
 @echo off
 rem ============================================================================
-rem  Alava Vision - atualizar (v0.7.0)
+rem  Alava Vision - atualizar (v0.14.0)
 rem  Baixa a versao nova do GitHub e reabre o sistema na TV.
 rem  1. Fecha servidor, player e o Chrome da TV (ferramentas\parar_alava_vision.ps1)
 rem  2. git pull: baixa a versao nova
@@ -11,10 +11,14 @@ rem  logins do Chrome continuam iguais.
 rem
 rem  Roda a partir de uma copia em %TEMP%: o git pull pode trocar este proprio
 rem  arquivo, e o cmd le o .bat aos poucos enquanto ele roda.
+rem  Modo automatico (0.14.0): atualizar.bat auto  -> nao para em nenhum "pause" (usado pelo botao
+rem  "Atualizar sistema" do painel, que roda sem ninguem na frente do PC; a saida vai para
+rem  data\update.log, mostrada no painel). Sem "auto", funciona igual a antes.
 rem  COMO REVERTER: git checkout <commit> -- atualizar.bat
 rem ============================================================================
 setlocal
 if /i "%~1"=="--copia" goto copia
+if /i "%~1"=="auto" set "ALAVA_AUTO=1"
 copy /y "%~f0" "%TEMP%\alava_vision_atualizar.bat" >nul
 "%TEMP%\alava_vision_atualizar.bat" --copia "%~dp0."
 
@@ -60,7 +64,7 @@ echo  AVISO: nao foi possivel baixar a versao nova.
 echo  Causas comuns: sem internet, ou algum arquivo desta pasta foi alterado a mao
 echo  (veja com: git status). O sistema sera aberto na versao atual.
 echo.
-pause
+if not defined ALAVA_AUTO pause
 
 :abrir
 echo.
@@ -72,5 +76,5 @@ exit
 
 :sem_pasta
 echo  ERRO: pasta do Alava Vision nao encontrada: %~2
-pause
+if not defined ALAVA_AUTO pause
 exit /b 1

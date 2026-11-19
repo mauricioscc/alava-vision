@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.12.0
+Alava Vision — Player (player.py) · versão 0.14.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -36,8 +36,18 @@ COMPORTAMENTO DO MONITOR
     Detalhes em monitors.py.
 
 LOGO DA ALAVA
-    O player não insere nada nas páginas. O logo faz parte das telas de clima e trânsito
-    (static/weather.html e /view/traffic no server.py); os sites aparecem sem alteração.
+    O logo faz parte das telas de clima e notícias (static/weather.html, view_news no server.py).
+    Sites, imagens, vídeos e mensagens aparecem sem alteração. Exceção: no trânsito (Waze), o
+    player desenha a faixa da Alava por cima do Waze (ver TRÂNSITO abaixo).
+
+TRÂNSITO (WAZE) — 0.14.0
+    Dentro de outra página o Waze não mostra o trânsito no Chrome do player: os cookies e o
+    reCAPTCHA dele são bloqueados como "de terceiros" (no painel funciona porque o navegador de
+    quem edita aceita). Por isso o player abre o Waze DIRETO (endereço de GET /api/traffic) e
+    desenha a faixa da Alava — logo, título e relógio — empurrando o mapa para baixo dela
+    (TRAFFIC_BAND_JS). O script só age em embed.waze.com.
+    Testar: abra o item de trânsito na TV; tem que aparecer o selo do reCAPTCHA no canto e as
+    linhas coloridas de trânsito. No terminal do player: "traffic · <nome> — Ns".
 
 COMO REVERTER
     Com Git:  git log --oneline  e  git checkout <commit> -- player.py
@@ -53,17 +63,20 @@ MAPA DO CÓDIGO
     Janela de horário de mensagens .. time_in_window()
     Contador que some após o fim .... countdown_visible()   (config.hide_after)
     Vídeo sem repetição ............. plays_once(), VIDEO_ENDED_JS  → avança quando o vídeo acaba
-    Curiosidades ("Hoje é dia") ..... today_count() (pula o item em dia sem nada),
+    Curiosidades ("Hoje é dia") ..... today_count() (pula o item em dia sem nada), today_per_card()
+                                      (0.14.0: segundos por card; tempo do item = por card × cards de hoje),
                                       curiosity_due() → intercala /view/today (Configurações)
     Itens que podem ir para a tela .. playable()
     Mudança durante a exibição ...... after_change(), _item_key()  (não recomeça a playlist a cada salvamento)
     "Na TV agora" e Pular item ...... report_now() → POST /api/player/now; state["skip"] na signature()
                                       e em after_change() ("next") → encerra o item e vai ao próximo
-    URL de cada tipo de item ........ item_url()
+    URL de cada tipo de item ........ item_url(), traffic_target() (trânsito → Waze direto)
+    Faixa da Alava sobre o Waze ..... TRAFFIC_BAND_JS, traffic_band_script()  (registrada no run())
     Loop de exibição ................ run()
     Parâmetros de linha de comando .. main()
 """
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -77,7 +90,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.12.0"
+__version__ = "0.14.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -277,6 +290,22 @@ def curiosity_due(state: dict, last_shown: float) -> dict | None:
             "duration": int(auto.get("duration", 15)), "config": {}}
 
 
+TODAY_SECONDS_PER_CARD = 30   # igual ao do server.py; vale quando o item/servidor não informa
+
+
+def today_per_card(item: dict, state: dict) -> int:
+    """Segundos de cada card do "Hoje é dia" (0.14.0): do item (config.per_card) ou, na curiosidade
+    automática, das Configurações (state.today.auto.per_card)."""
+    if item.get("id") == "auto":
+        raw = ((state.get("today") or {}).get("auto") or {}).get("per_card")
+    else:
+        raw = (item.get("config") or {}).get("per_card")
+    try:
+        return max(5, min(120, int(raw)))
+    except (TypeError, ValueError):
+        return TODAY_SECONDS_PER_CARD
+
+
 def playable(state: dict) -> list[dict]:
     """Itens da rotação atual que podem ir para a tela agora."""
     return [x for x in state.get("items", [])
@@ -345,6 +374,84 @@ def item_url(item: dict, server: str) -> str:
     if t in ("weather", "traffic", "today"):
         return f"{server}/view/{t}"
     return f"{server}/view/{t}/{item['id']}"
+
+
+# ─── Trânsito: Waze aberto direto (0.14.0, portado da 0.7.0) ──────────────────
+#
+# Dentro da nossa página (iframe) o Waze não mostra o trânsito no Chrome do player: o cookie e o
+# reCAPTCHA dele são bloqueados como "de terceiros", e o mapa aparece sem as linhas coloridas.
+# Por isso o player abre o Waze DIRETO (endereço de GET /api/traffic) e desenha por cima a faixa
+# da Alava — logo, título e relógio —, empurrando o mapa para baixo dela.
+
+def traffic_target(server: str) -> tuple[str, str | None]:
+    """(endereço a abrir, título da faixa). Título None = usar a nossa tela /view/traffic."""
+    try:
+        with urllib.request.urlopen(f"{server}/api/traffic", timeout=5) as r:
+            t = json.load(r)
+    except Exception:
+        return f"{server}/view/traffic", None
+    return (t["url"], t["title"]) if t.get("direct") else (f"{server}/view/traffic", None)
+
+
+# Registrada com add_init_script: roda no início de cada página, mas só faz algo em embed.waze.com.
+# Faixa fixa de 9% da altura (mesmo visual de /view/traffic); o <body> do Waze desce para logo abaixo
+# dela e o mapa recalcula o tamanho com o evento "resize". Estilos via element.style (funciona mesmo
+# com CSP restritiva) e logo embutido como data: (a página é https; imagem de http://127.0.0.1 seria
+# bloqueada). Se o título mudar (cidade nova), um novo script é registrado e o último vale.
+TRAFFIC_BAND_JS = """
+(() => {
+  if (location.hostname !== 'embed.waze.com' || window.top !== window) return;
+  const LOGO = __LOGO__, TITLE = __TITLE__;
+  const css = (el, props) => Object.entries(props).forEach(([k, v]) =>
+    el.style.setProperty(k.replace(/[A-Z]/g, m => '-' + m.toLowerCase()), v, 'important'));
+  const apply = () => {
+    const de = document.documentElement, b = document.body;
+    if (!de) return;
+    css(de, {background: '#0b1220'});
+    if (b && b.dataset.alavaBand !== '1') {
+      css(b, {position: 'fixed', top: '9vh', left: '0', right: '0', bottom: '0', height: 'auto',
+              width: 'auto', margin: '0', overflow: 'hidden', transform: 'translateZ(0)'});
+      b.dataset.alavaBand = '1';
+      window.dispatchEvent(new Event('resize'));
+    }
+    let band = document.getElementById('alava-band');
+    if (!band) {
+      band = document.createElement('div');
+      band.id = 'alava-band';
+      css(band, {position: 'fixed', top: '0', left: '0', right: '0', height: '9vh', zIndex: '2147483647',
+                 background: '#0b1220', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                 padding: '0 1.8vw', boxSizing: 'border-box', color: '#fff', fontFamily: 'system-ui, Segoe UI, sans-serif'});
+      const img = document.createElement('img');
+      img.src = LOGO; img.alt = 'Alava';
+      css(img, {height: 'clamp(26px, 4.2vh, 72px)', width: 'auto', opacity: '.9'});
+      const right = document.createElement('div');
+      css(right, {display: 'flex', alignItems: 'baseline', gap: '2vw'});
+      const title = document.createElement('span');
+      title.id = 'alava-band-title';
+      css(title, {fontSize: '2.2vh', fontWeight: '600', letterSpacing: '.2em', textTransform: 'uppercase', opacity: '.85'});
+      const clock = document.createElement('span');
+      clock.id = 'alava-band-clock';
+      css(clock, {fontSize: '3.6vh', fontWeight: '300', fontVariantNumeric: 'tabular-nums'});
+      right.append(title, clock);
+      band.append(img, right);
+      de.appendChild(band);
+    }
+    document.getElementById('alava-band-title').textContent = TITLE;
+    const n = new Date();
+    document.getElementById('alava-band-clock').textContent =
+      String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0');
+  };
+  apply();
+  document.addEventListener('DOMContentLoaded', apply);
+  setInterval(apply, 1000);
+})();
+"""
+
+
+def traffic_band_script(title: str) -> str:
+    logo = BASE / "assets" / "watermark.png"
+    src = "data:image/png;base64," + base64.b64encode(logo.read_bytes()).decode() if logo.exists() else ""
+    return TRAFFIC_BAND_JS.replace("__LOGO__", json.dumps(src)).replace("__TITLE__", json.dumps(title))
 
 
 # ─── Monitor da TV ────────────────────────────────────────────────────────────
@@ -418,6 +525,7 @@ def run(args, push: PushChannel):
             state: dict = {"items": []}
             idx = 0
             current_url = None
+            registered_band = None   # título da faixa do Waze já registrada (traffic_band_script)
             last_curiosity = 0.0   # 0 = a primeira curiosidade automática pode aparecer logo
 
             while True:
@@ -451,7 +559,17 @@ def run(args, push: PushChannel):
                     item = items[idx]
                     idx += 1
                 duration = max(3, int(item.get("duration", 30)))
-                url = item_url(item, server)
+                if item["type"] == "today":              # 0.14.0: cada card fica "per" s; o item, per × cards de hoje
+                    per = today_per_card(item, state)
+                    duration = per * max(1, today_count(state))
+                    url = f"{server}/view/today?per={per}"
+                elif item["type"] == "traffic":          # Waze direto + faixa da Alava (ver traffic_target)
+                    url, band_title = traffic_target(server)
+                    if band_title and band_title != registered_band:
+                        page.add_init_script(traffic_band_script(band_title))
+                        registered_band = band_title
+                else:
+                    url = item_url(item, server)
                 src = state.get("source") or {}
                 log(f"[{src.get('name', '?')}] {item['type']} · {item['name']} — {duration}s")
 
