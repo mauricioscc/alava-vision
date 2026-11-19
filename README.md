@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.15.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.16.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -92,6 +92,7 @@ pode ser desligado no item). Sites, imagens, vídeos e mensagens aparecem sem al
 - **Notícias (RSS):** uma manchete por vez, com foto e resumo. Escolha as fontes prontas (g1, Agência Brasil, BBC, ge, InfoMoney) ou cole qualquer feed RSS. Cada card fica **30 segundos** na tela por padrão: o tempo do item é *Segundos por card* × *Cards por vez* (o campo Duração não aparece nesse tipo). No rodapé, alternando a cada 15 s, a **cotação do dólar** e os **indicadores** (Euro, Selic, CDI, IPCA e IGP-M 12 meses, salário mínimo). A cotação do dólar (comercial ao vivo, gráfico de 30 dias e PTAX do Banco Central), que atualiza sozinha e pode ser desligada no item. O filtro de palavras esconde notícias de crimes e tragédias (lista editável), e o botão **Testar feeds** mostra o que vai aparecer antes de salvar.
   - **Foco contábil (0.13.0):** as fontes do **Portal Contábeis** (últimas notícias, notícias publicadas e legislação), o **Jornal Contábil**, o **CFC** e a **FENACON** já vêm prontas e marcadas como **Preferenciais**. O Contábeis — Artigos e o ConJur — Tributário estão na lista, só marcar. As fontes se revezam na fila, então nenhuma ocupa todas as vagas. Cada fonte tem uma **Prioridade** (Alta / Normal / Baixa), um liga/desliga e o botão **Testar feed**, que diz quantas notícias foram lidas e quantas são aproveitáveis.
   - **Como a fila é montada:** com pelo menos uma fonte de prioridade Alta, 3 de cada 4 notícias vêm das preferenciais e 1 das demais (ajustável: só preferenciais, 75% ou 50%). Matérias com palavras como *Receita Federal, Simples Nacional, IRPF, eSocial, Reforma Tributária, ICMS, SPED, prazo* sobem na fila (lista editável). A mesma matéria em dois feeds aparece uma vez só, e notícias mais velhas que o limite (30 dias) são ignoradas.
+  - **Sem repetir (0.16.0):** a TV anota cada manchete que mostrou (`data/news_seen.json`) e não repete por **3 dias**, valendo para todos os itens de notícias juntos (a Manhã não repete o que a Tarde já mostrou). Se um dia as novas acabarem, volta primeiro a que passou há mais tempo. A prévia do painel não conta como exibida. Para recomeçar, use **↺ Zerar histórico** no formulário do item de notícias.
   - **Na TV:** um selo mostra `FONTE • CATEGORIA` (ex.: *PORTAL CONTÁBEIS • TRIBUTÁRIO*) e, quando a matéria não tem foto, aparece a logo da Alava no lugar.
   - **Sem internet:** o servidor guarda as notícias em `data/news_cache.json` e continua mostrando as últimas lidas. O tempo de cache é `NEWS_TTL` no `.env` (padrão 600 s).
   - **Atenção:** o feed `/rss/legislacao/` do Contábeis está parado em novembro de 2020. Enquanto for assim, o **Testar feed** mostra "nenhuma aproveitável" e nenhuma legislação entra na fila (de propósito: não aparece lei de 2020 como se fosse novidade). Se ele voltar a publicar, passa a entrar sozinho.
@@ -127,7 +128,13 @@ Dois blocos na mesma trilha no mesmo horário: vale o que começa mais tarde (o 
 Para conferir a decisão atual: `http://localhost:8080/api/player/state`.
 
 No topo da aba Programação, **Na TV agora** mostra o item na tela, quanto falta e o próximo. O botão
-**⏭ Pular item** passa a TV para o próximo item na hora.
+**⏭ Pular item** passa a TV para o próximo item na hora, e **⏮ Voltar item** volta para o anterior (0.16.0).
+Quando a TV está nas notícias, aparecem também **◀ Notícia anterior** e **Próxima notícia ▶**, que trocam só a
+manchete (o item continua no ar).
+
+Ao lado fica a **foto da TV** (0.16.0): o player tira uma foto da tela a cada 5 minutos e o painel mostra
+"Última atualização em HH:MM". Clique na foto para ampliar. A foto fica só na memória do servidor (some ao
+reiniciar) e só aparece para quem entrou com a senha do painel.
 
 Salvar algo no painel não faz a TV recomeçar a playlist. O item na tela continua, e só aparece de novo se foi
 ele o editado. A playlist só recomeça do 1º item quando a programação troca de bloco.

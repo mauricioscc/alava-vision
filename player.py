@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.15.0
+Alava Vision — Player (player.py) · versão 0.16.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -73,6 +73,11 @@ MAPA DO CÓDIGO
                                       set_alert()/clear_alert() e as checagens dentro do laço de exibição do run()
     "Na TV agora" e Pular item ...... report_now() → POST /api/player/now; state["skip"] na signature()
                                       e em after_change() ("next") → encerra o item e vai ao próximo
+    Voltar item / trocar notícia .... state["back"] → after_change() "back" → back_index() (0.16.0);
+                                      state["card"] → "card" → page.evaluate(newsNav(±1)) só nas notícias
+    Foto da TV no painel (0.16.0) ... maybe_shot() no run() → take_shot() (CDP, 960 px) → send_shot()
+                                      → POST /api/player/shot; SHOT_EVERY (300 s), SHOT_FIRST, SHOT_SETTLE
+    Notícias sem repetir (0.16.0) ... item_url() abre /view/news/{id}?tv=1 (o servidor anota o que passou)
     URL de cada tipo de item ........ item_url(), traffic_target() (trânsito → Waze direto)
     Faixa da Alava sobre o Waze ..... TRAFFIC_BAND_JS, traffic_band_script()  (registrada no run())
     Loop de exibição ................ run()
@@ -93,7 +98,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -129,8 +134,10 @@ def fetch_state(server: str) -> dict:
 
 def signature(state: dict) -> tuple:
     """O que importa para saber se a TV precisa trocar de conteúdo.
-    "skip" (0.12.0) muda quando alguém clica em "Pular item" no painel."""
-    return state.get("version"), state.get("slot"), state.get("skip")
+    "skip" (0.12.0) muda quando alguém clica em "Pular item" no painel; "back" em "Voltar item" e
+    "card" em "Notícia anterior/próxima" (0.16.0)."""
+    return (state.get("version"), state.get("slot"), state.get("skip"), state.get("back"),
+            tuple(state.get("card") or ()))
 
 
 class PushChannel:
@@ -331,13 +338,20 @@ def after_change(item: dict, old: dict, new: dict) -> tuple[str, int | None]:
       "keep",  idx     → o item na tela não mudou: continua sem interromper; idx = próximo da fila;
       "reload", idx    → o item na tela foi editado: mostra de novo já com a mudança (idx = ele);
       "skip",  idx     → foi removido/desativado: vai para o próximo que ainda existe;
-      "next",  None    → clicaram em "Pular item" no painel: encerra este e vai para o próximo.
+      "next",  None    → clicaram em "Pular item" no painel: encerra este e vai para o próximo;
+      "back",  None    → clicaram em "Voltar item" (0.16.0): o run() volta para o ANTERIOR da fila;
+      "card",  None    → clicaram em "Notícia anterior/próxima" (0.16.0): o item continua; o run()
+                         troca a manchete na página (newsNav).
     idx None = manter o índice atual.
     """
     if new.get("slot") != old.get("slot"):
         return "restart", 0
     if new.get("skip") != old.get("skip"):           # botão "Pular item" do painel (0.12.0)
         return "next", None                          # idx já aponta para o próximo da fila
+    if new.get("back") != old.get("back"):           # botão "Voltar item" do painel (0.16.0)
+        return "back", None
+    if (new.get("card") or [0])[0] != (old.get("card") or [0])[0]:   # notícia anterior/próxima (0.16.0)
+        return "card", None
     if item.get("id") == "auto":                     # curiosidade intercalada: não está na lista
         return "keep", None
     new_items, old_items = playable(new), playable(old)
@@ -450,7 +464,65 @@ def item_url(item: dict, server: str) -> str:
         return item["config"].get("url", "about:blank")
     if t in ("weather", "traffic", "today"):
         return f"{server}/view/{t}"
+    if t == "news":                      # 0.16.0: ?tv=1 = pacote sem as já exibidas + anota o que passou
+        return f"{server}/view/news/{item['id']}?tv=1"
     return f"{server}/view/{t}/{item['id']}"
+
+
+def back_index(item: dict, items: list[dict], idx: int) -> int:
+    """Índice do item ANTERIOR ao que está na tela (botão "Voltar item", 0.16.0).
+    idx já aponta para o próximo da fila. Curiosidade intercalada (id "auto") não está na lista:
+    aí o anterior é o último item normal que passou (idx - 1)."""
+    if not items:
+        return 0
+    ids = [x["id"] for x in items]
+    if item.get("id") in ids:
+        return (ids.index(item["id"]) - 1) % len(items)
+    return (idx - 1) % len(items)
+
+
+# ─── Foto da TV para o painel (0.16.0) ───────────────────────────────────────
+# A cada SHOT_EVERY s o player tira uma foto pequena (SHOT_WIDTH px de largura, JPEG) da página na tela e
+# manda ao servidor (POST /api/player/shot). O painel mostra ao lado de "Na TV agora", com a hora.
+# Usa o Chrome DevTools (Page.captureScreenshot com escala): a página não pisca e custa ~0,1 s.
+# Não tira foto nos primeiros SHOT_SETTLE s de um item (a página ainda está carregando).
+SHOT_EVERY = 300
+SHOT_FIRST = 15
+SHOT_SETTLE = 6
+SHOT_WIDTH = 960
+
+
+def take_shot(page) -> bytes | None:
+    try:
+        w, h, sx, sy = page.evaluate("[innerWidth, innerHeight, scrollX, scrollY]")
+        cdp = page.context.new_cdp_session(page)
+        try:
+            res = cdp.send("Page.captureScreenshot", {"format": "jpeg", "quality": 60, "clip": {
+                "x": sx, "y": sy, "width": w, "height": h, "scale": min(1.0, SHOT_WIDTH / max(1, w))}})
+        finally:
+            try:
+                cdp.detach()
+            except Exception:
+                pass
+        return base64.b64decode(res["data"])
+    except Exception as e:
+        log("Foto da TV falhou:", str(e).splitlines()[0][:100])
+        return None
+
+
+def send_shot(server: str, jpg: bytes, item_name: str) -> None:
+    """Manda a foto ao servidor numa thread à parte (se não responder, a TV segue normalmente)."""
+    import urllib.parse
+
+    def send():
+        try:
+            rq = urllib.request.Request(f"{server}/api/player/shot?item={urllib.parse.quote(item_name or '')}",
+                                        data=jpg, method="POST", headers={"Content-Type": "image/jpeg"})
+            urllib.request.urlopen(rq, timeout=5).close()
+        except Exception:
+            pass   # servidor antigo (sem a rota) ou reiniciando
+
+    threading.Thread(target=send, name="foto", daemon=True).start()
 
 
 # ─── Trânsito: Waze aberto direto (0.14.0, portado da 0.7.0) ──────────────────
@@ -629,6 +701,16 @@ def run(args, push: PushChannel):
             current_url = None
             registered_band = None   # título da faixa do Waze já registrada (traffic_band_script)
             last_curiosity = 0.0   # 0 = a primeira curiosidade automática pode aparecer logo
+            next_shot = time.time() + SHOT_FIRST   # foto da TV para o painel (0.16.0)
+
+            def maybe_shot(name: str, since: float) -> None:
+                nonlocal next_shot
+                now = time.time()
+                if now >= next_shot and now - since >= SHOT_SETTLE:
+                    next_shot = now + SHOT_EVERY
+                    jpg = take_shot(page)
+                    if jpg:
+                        send_shot(server, jpg, name)
 
             while True:
                 pushed = push.current()
@@ -649,6 +731,7 @@ def run(args, push: PushChannel):
                     for _ in range(5):
                         hit = push.wait(1)       # conteúdo novo no painel aparece na hora
                         guard.check()
+                        maybe_shot("Nenhum item ativo", 0)
                         if hit:
                             break
                     continue
@@ -726,6 +809,7 @@ def run(args, push: PushChannel):
                 while time.time() < deadline:
                     push.wait(1)
                     guard.check()
+                    maybe_shot(item.get("name", ""), nav_t)
                     # Waze: a chamada do trânsito veio com sucesso? (ou passou WAZE_WAIT sem vir)
                     if waze_pending:
                         # O Playwright (modo síncrono) só ENTREGA os eventos de rede durante uma chamada ao navegador.
@@ -790,10 +874,22 @@ def run(args, push: PushChannel):
                             idx = new_idx
                         if action == "keep":
                             continue                     # salvaram outra coisa: segue exibindo este item
+                        if action == "card":             # notícia anterior/próxima: só troca a manchete
+                            d = -1 if (state.get("card") or [0, 1])[1] < 0 else 1
+                            if item["type"] == "news":
+                                try:
+                                    page.evaluate(f"window.newsNav && window.newsNav({d})")
+                                    log("Notícia " + ("anterior" if d < 0 else "seguinte") + " (painel)")
+                                except Exception:
+                                    pass
+                            continue
+                        if action == "back":
+                            idx = back_index(item, playable(state), idx)
                         log({"restart": "Programação mudou — trocando conteúdo",
                              "reload": "Item editado no painel — mostrando de novo",
                              "skip": "Item removido/desativado — próximo",
-                             "next": "Pulado pelo painel — próximo item"}[action])
+                             "next": "Pulado pelo painel — próximo item",
+                             "back": "Voltando ao item anterior (painel)"}[action])
                         current_url = None
                         deadline = 0
         finally:

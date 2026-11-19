@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.15.0
+Alava Vision — Servidor (server.py) · versão 0.16.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -31,6 +31,7 @@ COMO RODAR
         Quem é "preferencial" ........ NEWS_PREFERRED_MIN (peso ≥ 8)
         Proporção preferenciais ...... NEWS_PREFERRED_RATIO (0.75 = 3 de cada 4); config.preferred_ratio por item
         Segundos de cada card ........ NEWS_SECONDS_PER_CARD (padrão 30; config.per_headline por item)
+        Sem repetir (0.16.0) ......... NEWS_SEEN_DAYS (3 dias), data/news_seen.json, news_mark_seen(), get_news(tv=True)
         Revezamento entre fontes ..... _round_robin_by_source() (cada fonte entrega uma matéria por rodada)
         Palavras que sobem a matéria . NEWS_BOOST_WORDS (config.boost_words por item) e NEWS_BOOST_HOURS
         Idade máxima da notícia ...... NEWS_MAX_AGE_DAYS (config.max_age_days; 0 = sem limite)
@@ -54,6 +55,9 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.15.0 (antes da foto da TV, dos botões Voltar/Notícia e das notícias sem repetir):
+        git checkout d2733ea -- server.py player.py static/index.html   (ou copie backup_v0.16.0_20261119/)
+        O arquivo data/news_seen.json pode ser apagado (a 0.15.0 não usa).
     Para a 0.14.0 (antes dos avisos de login/Waze e dos indicadores no rodapé):
         git checkout d484a6f -- server.py player.py static/index.html   (ou copie backup_v0.14.0_20261119/)
         ferramentas/login_na_tv.bat é novo e pode ficar (nada depende dele).
@@ -106,6 +110,12 @@ MAPA DO CÓDIGO
                                       _player_alerts, ALERT_KINDS (login, waze); faixa no painel: #alerts-bar
     Na TV agora / pular item ........ POST /api/player/now (o player informa, só localhost), GET /api/player/now,
                                       POST /api/player/skip (_skip_seq → state["skip"] → WebSocket)
+    Voltar item / notícia (0.16.0) .. POST /api/player/back (_back_seq → state["back"]), POST /api/player/card
+                                      {dir: -1|1} (_card_cmd → state["card"]; o player chama newsNav() na tela)
+    Foto da TV (0.16.0) ............. POST /api/player/shot (o player manda a cada 5 min, só localhost; fica na
+                                      memória, _tv_shot), GET /api/player/shot (com login); hora em GET /api/player/now
+    Notícias sem repetir (0.16.0) ... /view/news/{id}?tv=1 e GET /api/news/{id}?tv=1; POST /api/news-seen (a tela da
+                                      TV anota o card, só localhost), GET/DELETE /api/news-seen (painel: contar/zerar)
     O que está no ar agora .......... resolve_now() (escolhe a régua do dia), _pick_block(), current_state(),
                                       GET /api/player/state (campo "ruler" = régua em uso hoje)
     Aviso instantâneo (WebSocket) ... WS /ws/player, _players, _broadcast(), _push_watcher(),
@@ -176,11 +186,11 @@ import aiofiles
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 load_dotenv()
 
@@ -911,6 +921,8 @@ def current_state() -> dict:
     state["version"] = ver["val"] if ver else 0
     state["server_time"] = datetime.now().strftime("%H:%M")
     state["skip"] = _skip_seq   # botão "Pular item" do painel (o player compara com o anterior)
+    state["back"] = _back_seq   # 0.16.0: botão "Voltar item"
+    state["card"] = [_card_cmd["seq"], _card_cmd["dir"]]   # 0.16.0: notícia anterior/próxima ([nº do clique, -1|1])
     # Avisos por data intercalados agora: entram na assinatura do WebSocket para o player
     # receber a lista nova quando um aviso começa ou termina (ex.: início do horário de serviço)
     state["notices"] = [i["id"] for i in state["items"] if i.get("playlist_id") == NOTICE_PLAYLIST]
@@ -956,15 +968,18 @@ async def player_now_report(request: Request):
 
 @app.get("/api/player/now")
 def player_now():
-    """O que o player disse que está na tela e há quantos segundos ("stale" se faz tempo demais)."""
+    """O que o player disse que está na tela e há quantos segundos ("stale" se faz tempo demais).
+    shot_ts/shot_at/shot_item (0.16.0): quando chegou a última foto da TV e de qual item."""
+    shot = ({"shot_ts": _tv_shot["at"], "shot_at": datetime.fromtimestamp(_tv_shot["at"]).strftime("%H:%M"),
+             "shot_item": _tv_shot["item"]} if _tv_shot else {"shot_ts": 0})
     if not _now_playing:
-        return {"playing": False}
+        return {"playing": False, **shot}
     elapsed = time.time() - _now_playing["started"]
     dur = int(_now_playing.get("duration") or 0)
     return {"playing": True, **_now_playing, "elapsed": round(elapsed, 1),
             "remaining": max(0, round(dur - elapsed)),
             # passou bem do tempo e o player não avisou o item seguinte: provavelmente está fechado
-            "stale": elapsed > dur + 90, "players": len(_players)}
+            "stale": elapsed > dur + 90, "players": len(_players), **shot}
 
 
 # ─── Avisos do player para o painel (0.15.0) ─────────────────────────────────
@@ -1015,6 +1030,57 @@ def player_skip():
     return {"ok": True, "skip": _skip_seq, "players": len(_players)}
 
 
+# ─── Voltar item / notícia anterior e próxima (0.16.0) ───────────────────────
+# Mesmo caminho do "Pular item": um contador vai no estado e na assinatura do WebSocket.
+#   "back" → o player encerra o item e mostra o ANTERIOR da fila;
+#   "card" → [nº do clique, -1|1]: se a TV está nas notícias, o player chama newsNav() na página
+#            (o item continua no ar; só troca a manchete).
+_back_seq = 0
+_card_cmd = {"seq": 0, "dir": 0}
+
+
+@app.post("/api/player/back", dependencies=[Depends(require_auth)])
+def player_back():
+    global _back_seq
+    _back_seq += 1
+    return {"ok": True, "back": _back_seq, "players": len(_players)}
+
+
+@app.post("/api/player/card", dependencies=[Depends(require_auth)])
+async def player_card(request: Request):
+    body = await request.json()
+    d = -1 if int(body.get("dir") or 1) < 0 else 1
+    _card_cmd.update(seq=_card_cmd["seq"] + 1, dir=d)
+    return {"ok": True, "dir": d, "players": len(_players)}
+
+
+# ─── Foto da TV no painel (0.16.0) ──────────────────────────────────────────
+# O player tira uma foto pequena da tela a cada 5 min (PLAYER SHOT_EVERY) e manda aqui
+# (POST /api/player/shot, só do próprio computador). Fica SÓ NA MEMÓRIA: reiniciar o servidor apaga.
+# O painel mostra ao lado de "Na TV agora" com "Última atualização em HH:MM" (GET /api/player/shot,
+# exige login: a tela do Acessórias mostra dados de clientes).
+_tv_shot: dict = {}
+SHOT_MAX_BYTES = 3_000_000
+
+
+@app.post("/api/player/shot")
+async def player_shot_upload(request: Request, item: str = ""):
+    if not _is_local(request):
+        raise HTTPException(403, "Só o player deste computador manda a foto da TV")
+    data = await request.body()
+    if not data or len(data) > SHOT_MAX_BYTES or not data.startswith(b"\xff\xd8"):
+        raise HTTPException(400, "Foto inválida (esperado JPEG de até 3 MB)")
+    _tv_shot.update(jpg=data, at=time.time(), item=item[:120])
+    return {"ok": True}
+
+
+@app.get("/api/player/shot", dependencies=[Depends(require_auth)])
+def player_shot():
+    if not _tv_shot:
+        raise HTTPException(404, "O player ainda não mandou nenhuma foto")
+    return Response(_tv_shot["jpg"], media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 # ─── Aviso instantâneo para os players (WebSocket) ────────────────────────────
 #
 # Antes, o player perguntava a cada 5 s "mudou alguma coisa?". Agora ele mantém uma
@@ -1033,7 +1099,8 @@ def _signature(state: dict) -> tuple:
     # "today" entra para o player saber na virada do dia (outras curiosidades) e quando as
     # curiosidades automáticas mudam em Configurações (que não alteram a versão).
     return (state.get("version"), state.get("slot"), json.dumps(state.get("today"), sort_keys=True),
-            tuple(state.get("notices") or ()), state.get("skip"))
+            tuple(state.get("notices") or ()), state.get("skip"), state.get("back"),
+            tuple(state.get("card") or ()))
 
 
 async def _send(ws: WebSocket, text: str) -> None:
@@ -1079,9 +1146,9 @@ async def _push_watcher() -> None:
 async def _notify_players(request: Request, call_next):
     """Depois que uma alteração no painel termina (já gravada no banco), acorda o vigia."""
     response = await call_next(request)
-    # /api/player/now é o próprio player avisando o que pôs na tela: não muda a programação
+    # /api/player/now, a foto da TV e a anotação de notícias exibidas vêm do próprio player: não mudam a programação
     if (request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/")
-            and request.url.path != "/api/player/now"
+            and request.url.path not in ("/api/player/now", "/api/player/shot", "/api/news-seen")
             and response.status_code < 400 and _state_changed is not None):
         _state_changed.set()
     return response
@@ -1327,6 +1394,62 @@ NEWS_SECONDS_PER_CARD = 30       # tempo padrão de cada card de notícia na TV 
 NEWS_BOOST_HOURS = 8            # cada palavra-chave "rejuvenesce" a matéria em 8 h na fila (máx. 3 palavras)
 NEWS_WEIGHT_HOURS = 2            # cada ponto de peso acima de 5 vale 2 h de vantagem (peso 10 = +10 h)
 
+# ── NOTÍCIAS SEM REPETIR (0.16.0) ──
+# Antes, cada vez que o item de notícias entrava, a TV mostrava as mesmas max_items manchetes (15 cards
+# de 20 s num item de 300 s = a lista inteira, ~15 vezes por dia). Agora o player abre a tela com ?tv=1,
+# e cada card que fica na tela é anotado em data/news_seen.json ("t:<título>" e "l:<link>" → hora).
+# O registro é UM SÓ para todos os itens de notícias: a Manhã não repete o que a Tarde já mostrou.
+# Na montagem do pacote (get_news com tv=True): primeiro as NUNCA exibidas (na ordem de prioridade de
+# sempre); quando acabam, as exibidas HÁ MAIS TEMPO. Anotações com mais de NEWS_SEEN_DAYS dias somem.
+# A prévia do painel e o "Testar feed" não anotam nada (não têm ?tv=1).
+# Zerar: Painel → item de notícias → "Zerar histórico" (DELETE /api/news-seen) ou apague o arquivo.
+NEWS_SEEN_FILE = DATA_DIR / "news_seen.json"
+NEWS_SEEN_DAYS = 3
+_news_seen: dict[str, float] | None = None      # carregado do disco no 1º uso
+_news_seen_lock = threading.Lock()
+
+
+def _news_seen_data() -> dict[str, float]:
+    """O registro (já sem as anotações vencidas). Chamar com _news_seen_lock."""
+    global _news_seen
+    if _news_seen is None:
+        try:
+            _news_seen = {str(k): float(v) for k, v in json.loads(NEWS_SEEN_FILE.read_text(encoding="utf-8")).items()}
+        except (OSError, ValueError, TypeError, AttributeError):
+            _news_seen = {}          # 1ª vez ou arquivo corrompido
+    limit = time.time() - NEWS_SEEN_DAYS * 86400
+    for k in [k for k, t in _news_seen.items() if t < limit]:
+        del _news_seen[k]
+    return _news_seen
+
+
+def _news_seen_save() -> None:
+    """Grava o registro (chamar com _news_seen_lock). Arquivo temporário + troca: nunca fica pela metade."""
+    try:
+        tmp = NEWS_SEEN_FILE.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(_news_seen or {}, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(NEWS_SEEN_FILE)
+    except OSError as e:
+        print(f"[notícias] não consegui gravar o histórico de exibidas: {e}")
+
+
+def news_mark_seen(title: str, link: str = "") -> None:
+    link_key, title_key = _news_dedupe_keys({"title": title, "link": link})
+    if not title_key and not link_key:
+        return
+    with _news_seen_lock:
+        seen, now = _news_seen_data(), time.time()
+        if title_key:
+            seen["t:" + title_key] = now
+        if link_key:
+            seen["l:" + link_key] = now
+        _news_seen_save()
+
+
+def news_seen_snapshot() -> dict[str, float]:
+    with _news_seen_lock:
+        return dict(_news_seen_data())
+
 
 def _local(tag: str) -> str:
     """'{http://search.yahoo.com/mrss/}content' → 'content'."""
@@ -1552,7 +1675,8 @@ def _interleave(pref: list[dict], other: list[dict], ratio: float, limit: int) -
     return out
 
 
-def get_news(cfg: dict, force: bool = False) -> dict:
+def get_news(cfg: dict, force: bool = False, tv: bool = False) -> dict:
+    """Fila de manchetes do item. tv=True (0.16.0): a TV pediu — as já exibidas (news_seen) vão para o fim."""
     import re
     from concurrent.futures import ThreadPoolExecutor
     feeds = [u.strip() for u in cfg.get("feeds", []) if str(u).strip().startswith(("http://", "https://"))][:12]
@@ -1617,12 +1741,23 @@ def get_news(cfg: dict, force: bool = False) -> dict:
     for s in stats:
         s["fresh"] = fresh.get(s["url"], 0)
 
+    # Notícias sem repetir (0.16.0): na TV, separa as já exibidas. As novas seguem a ordem de sempre;
+    # as exibidas só completam o pacote quando as novas acabam, da exibida há mais tempo para a mais recente.
+    seen = news_seen_snapshot() if tv else {}
+
+    def last_seen(it: dict) -> float:
+        link, title = _news_dedupe_keys(it)
+        return max(seen.get("t:" + title, 0.0), seen.get("l:" + link, 0.0) if link else 0.0)
+    new_items = [i for i in kept if not last_seen(i)] if seen else kept
+    old_items = sorted((i for i in kept if last_seen(i)), key=last_seen) if seen else []
+
     if prio:
-        pref = _round_robin_by_source(sorted((i for i in kept if i["weight"] >= NEWS_PREFERRED_MIN), key=lambda x: -x["score"]))
-        other = _round_robin_by_source(sorted((i for i in kept if i["weight"] < NEWS_PREFERRED_MIN), key=lambda x: -x["score"]))
+        pref = _round_robin_by_source(sorted((i for i in new_items if i["weight"] >= NEWS_PREFERRED_MIN), key=lambda x: -x["score"]))
+        other = _round_robin_by_source(sorted((i for i in new_items if i["weight"] < NEWS_PREFERRED_MIN), key=lambda x: -x["score"]))
         ordered = _interleave(pref, other, ratio, max_items)
     else:
-        ordered = sorted(kept, key=lambda x: -x["ts"])[:max_items]    # como na 0.12.0: só por data
+        ordered = sorted(new_items, key=lambda x: -x["ts"])[:max_items]    # como na 0.12.0: só por data
+    ordered += old_items[:max_items - len(ordered)]
     out = []
     for it in ordered:
         it["preferred"] = prio and it["weight"] >= NEWS_PREFERRED_MIN
@@ -1630,7 +1765,8 @@ def get_news(cfg: dict, force: bool = False) -> dict:
             it.pop(k, None)
         out.append(it)
     return {"items": out, "errors": errors, "feeds": stats, "priority": bool(prio),
-            "updated_at": datetime.now().strftime("%H:%M")}
+            "updated_at": datetime.now().strftime("%H:%M"),
+            "unseen": len(new_items), "seen": len(old_items)}     # 0.16.0: sobram N novas (só com tv=True)
 
 
 def _try(fn, *a):
@@ -1672,8 +1808,37 @@ def _migrate_news_sources() -> int:
 
 
 @app.get("/api/news/{item_id}")
-def api_news(item_id: str):
-    return get_news(_item_config(item_id))
+def api_news(item_id: str, tv: int = 0):
+    return get_news(_item_config(item_id), tv=bool(tv))
+
+
+def _is_local(request: Request) -> bool:
+    return bool(request.client) and request.client.host in ("127.0.0.1", "::1", "localhost")
+
+
+@app.post("/api/news-seen")
+async def news_seen_add(request: Request):
+    """A tela de notícias da TV (aberta com ?tv=1) anota o card que ficou na tela. Só do próprio computador."""
+    if not _is_local(request):
+        raise HTTPException(403, "Só a TV deste computador anota as notícias exibidas")
+    body = await request.json()
+    news_mark_seen(str(body.get("title") or ""), str(body.get("link") or ""))
+    return {"ok": True}
+
+
+@app.get("/api/news-seen", dependencies=[Depends(require_auth)])
+def news_seen_info():
+    seen = news_seen_snapshot()
+    return {"count": sum(1 for k in seen if k.startswith("t:")), "days": NEWS_SEEN_DAYS}
+
+
+@app.delete("/api/news-seen", dependencies=[Depends(require_auth)])
+def news_seen_clear():
+    global _news_seen
+    with _news_seen_lock:
+        _news_seen = {}
+        _news_seen_save()
+    return {"ok": True}
 
 
 @app.post("/api/news-test", dependencies=[Depends(require_auth)])
@@ -3078,14 +3243,18 @@ if (SHOW_FX || SHOW_IND) {
 
 
 @app.get("/view/news/{item_id}")
-def view_news(item_id: str):
+def view_news(item_id: str, tv: int = 0):
     """Tela de notícias: uma manchete por vez (foto + título + resumo), trocando a cada
     config.per_headline segundos. Começa já com as manchetes embutidas (sem "Carregando…")
-    e atualiza sozinha a cada 5 min. Guarda no navegador da TV em qual manchete parou,
-    para a próxima vez que o item entrar continuar dali em vez de repetir as primeiras.
+    e atualiza sozinha a cada 5 min.
+    tv=1 (0.16.0, só o player usa): o pacote vem sem as já exibidas e cada card que fica 3 s (SEEN_AFTER, no JS)
+    na tela é anotado (POST /api/news-seen). Sem tv=1 (prévia do painel) continua como antes:
+    guarda no navegador em qual manchete parou e não anota nada.
+    window.newsNav(-1 | 1) (0.16.0): volta / avança um card (botões do painel, via player).
     """
     cfg = _item_config(item_id)
-    data = json.dumps(get_news(cfg), ensure_ascii=False).replace("</", "<\\/")
+    tv_js = "true" if tv else "false"
+    data = json.dumps(get_news(cfg, tv=bool(tv)), ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(str(cfg.get("title") or "Notícias"))
     accent = _css_color(cfg.get("accent"), "#38bdf8")
     per = _num(cfg.get("per_headline"), NEWS_SECONDS_PER_CARD, 4, 120)   # padrão 30 s por card (0.13.0)
@@ -3154,6 +3323,7 @@ html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5
 let N = {data}, FX = {fx_data};
 const PER = {per} * 1000, SHOW_IMG = {show_img}, KEY = 'news-idx-{html.escape(item_id)}';
 const SHOW_FX = {show_fx_js}, SHOW_IND = {show_ind_js}, ACC = '{accent}';
+const TV = {tv_js}, SEEN_AFTER = 3000;   // 0.16.0: na TV, o card que ficou 3 s na tela conta como exibido
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
 function tick() {{ const d = new Date(); $('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()); }}
@@ -3164,16 +3334,28 @@ function ago(ts) {{
   if (m < 60) return m <= 1 ? 'agora' : `há ${{m}} min`;
   const h = Math.round(m / 60); return h < 24 ? `há ${{h}} h` : `há ${{Math.round(h / 24)}} d`;
 }}
-let idx = 0, picToken = 0;
-try {{ idx = parseInt(localStorage.getItem(KEY)) || 0; }} catch (e) {{}}
-function show() {{
+// idx = próximo card a mostrar; cur = o que está na tela. Na TV começa sempre do 1º: o pacote já vem
+// sem as manchetes exibidas. Na prévia, continua de onde parou (localStorage), como antes da 0.16.0.
+let idx = 0, cur = 0, picToken = 0, seenTimer = 0, timer = 0;
+if (!TV) {{ try {{ idx = parseInt(localStorage.getItem(KEY)) || 0; }} catch (e) {{}} }}
+function markSeen(it) {{
+  clearTimeout(seenTimer);
+  if (!TV) return;
+  seenTimer = setTimeout(() => fetch('/api/news-seen', {{method: 'POST', headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{title: it.title, link: it.link || ''}})}}).catch(() => {{}}), SEEN_AFTER);
+}}
+function show(target) {{
   const list = (N && N.items) || [];
   if (!list.length) {{
-    document.body.insertAdjacentHTML('beforeend', '<div class="empty">Sem notícias no momento.<br>Confira os endereços dos feeds no painel.</div>');
+    if (!document.querySelector('.empty'))
+      document.body.insertAdjacentHTML('beforeend', '<div class="empty">Sem notícias no momento.<br>Confira os endereços dos feeds no painel.</div>');
     $('card').hidden = true; return;
   }}
-  idx %= list.length;
-  const it = list[idx];
+  const i = (((target ?? idx) % list.length) + list.length) % list.length;
+  cur = i; idx = i + 1;
+  try {{ if (!TV) localStorage.setItem(KEY, idx % list.length); }} catch (e) {{}}
+  const it = list[i];
+  markSeen(it);
   $('card').classList.add('out');
   setTimeout(() => {{
     const img = SHOW_IMG && it.image;
@@ -3191,16 +3373,23 @@ function show() {{
     $('meta').textContent = tag ? ago(it.ts) : [it.source, ago(it.ts)].filter(Boolean).join('  ·  ');
     $('headline').textContent = it.title;
     $('summary').textContent = it.summary;
-    $('count').textContent = `${{idx + 1}} / ${{list.length}}`;
+    $('count').textContent = `${{i + 1}} / ${{list.length}}`;
     const bar = $('bar'); bar.style.transition = 'none'; bar.style.width = '0';
     requestAnimationFrame(() => requestAnimationFrame(() => {{ bar.style.transition = `width ${{PER}}ms linear`; bar.style.width = '100%'; }}));
     $('card').classList.remove('out');
-    try {{ localStorage.setItem(KEY, (idx + 1) % list.length); }} catch (e) {{}}
-    idx++;
   }}, 450);
 }}
-show(); setInterval(show, PER);
-setInterval(async () => {{ try {{ N = await (await fetch('/api/news/{html.escape(item_id)}')).json(); }} catch (e) {{}} }}, 300000);
+function restart(target) {{ clearInterval(timer); show(target); timer = setInterval(show, PER); }}
+// Botões "Notícia anterior / próxima" do painel: o player chama newsNav(-1) ou newsNav(1) nesta página.
+window.newsNav = d => restart(cur + (d < 0 ? -1 : 1));
+restart();
+// Atualiza a fila a cada 5 min. Na TV, o pacote novo já vem sem as exibidas: recomeça do 1º dele.
+setInterval(async () => {{
+  try {{
+    N = await (await fetch('/api/news/{html.escape(item_id)}' + (TV ? '?tv=1' : ''))).json();
+    if (TV) idx = 0;
+  }} catch (e) {{}}
+}}, 300000);
 {NEWS_FX_JS}
 </script>
 </body></html>""", headers={"Cache-Control": "no-store"})

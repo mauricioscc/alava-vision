@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.15.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.16.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,6 +9,8 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.15.0 (antes da foto da TV, dos botões Voltar/Notícia e das notícias sem repetir):
+        git checkout d2733ea -- static/index.html server.py player.py   (ou copie backup_v0.16.0_20261119/)
     Para a 0.14.0 (antes dos avisos de login/Waze e dos indicadores no rodapé):
         git checkout d484a6f -- static/index.html server.py player.py   (ou copie backup_v0.14.0_20261119/)
     Para a 0.13.0 (antes do botão Atualizar sistema e do tempo por card no "Hoje é dia"):
@@ -70,6 +72,11 @@
     Aba Programação (timeline) ..... #tab-schedule, objeto TL, loadTimeline(), renderTimeline()
       na TV agora / pular item ..... #now-card (#nc-*), #btn-skip, NOW, refreshNow() → GET /api/player/now,
                                      renderNow(), skipItem() → POST /api/player/skip
+      voltar / notícia ant./próx. .. #btn-back → backItem() → POST /api/player/back; #nc-news (só nas notícias)
+                                     → newsCard(±1) → POST /api/player/card (0.16.0)
+      foto da TV (0.16.0) .......... #nc-shot, #nc-shot-at ("Última atualização em HH:MM"), refreshShot() →
+                                     GET /api/player/shot (a cada 5 min o player manda uma); clique = #shot-overlay
+      histórico de notícias ........ #news-seen-info, loadNewsSeen(), clearNewsSeen() → /api/news-seen (0.16.0)
       biblioteca arrastável ........ renderLibrary(), .chip
       régua, trilhas, zoom ......... renderRuler(), .track, PXH, TL.pxh (zoom contínuo) e TL.zoom (passo da grade)
       zoom com o mouse ............. #zoom-seg (atalhos Dia todo…1 min), .zoom-ctl (#zoom-range, −/+), applyZoom(),
@@ -446,6 +453,23 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 .nc-bar{height:4px;border-radius:2px;background:var(--grid-strong);margin-top:8px;overflow:hidden}
 .nc-bar i{display:block;height:100%;width:0;background:var(--accent);transition:width 1s linear}
 @media(max-width:700px){.now-card{flex-wrap:wrap}.now-card .btn{width:100%;justify-content:center}}
+/* Foto da TV (0.16.0): miniatura 16:9 da última foto que o player mandou (a cada 5 min) */
+.nc-shot{flex:0 0 auto;width:208px;display:flex;flex-direction:column;gap:4px}
+.nc-shot .shot-box{width:208px;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:#0b1120;border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;color:#64748b;font-size:12px;text-align:center;cursor:zoom-in;padding:0}
+.nc-shot img{width:100%;height:100%;object-fit:cover;display:block}
+.nc-shot img[hidden]{display:none}
+.nc-shot-at{font-size:11.5px;color:var(--muted);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nc-actions{display:flex;flex-direction:column;gap:6px;align-items:stretch}
+.nc-actions .row{display:flex;gap:6px}
+.nc-actions .row .btn{flex:1;justify-content:center}
+.nc-news[hidden]{display:none}
+#shot-overlay{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.82);align-items:center;justify-content:center;
+  flex-direction:column;gap:10px;cursor:zoom-out}
+#shot-overlay:not([hidden]){display:flex}
+#shot-overlay img{max-width:92vw;max-height:84vh;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+#shot-overlay div{color:#e2e8f0;font-size:14px}
+@media(max-width:700px){.nc-shot,.nc-shot .shot-box{width:100%}.nc-actions{width:100%}}
 
 /* ── Réguas por dia da semana (0.11.0) ───────────────────────────────────── */
 .ruler-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px}
@@ -568,7 +592,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('calendar')" id="nb-calendar"><span class="ic">▦</span> Calendário</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.15.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.16.0</div>
 </aside>
 
 <div class="main">
@@ -601,6 +625,13 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
   <div class="content" id="tab-schedule" hidden>
     <!-- Na TV agora + Pular item (0.12.0) -->
     <div class="now-card" id="now-card">
+      <!-- Foto da TV (0.16.0): o player manda uma a cada 5 min -->
+      <div class="nc-shot">
+        <button class="shot-box" id="nc-shot-box" onclick="openShot()" title="Clique para ampliar">
+          <img id="nc-shot" alt="Foto da tela da TV" hidden><span id="nc-shot-empty">Sem foto da TV ainda</span>
+        </button>
+        <div class="nc-shot-at" id="nc-shot-at"></div>
+      </div>
       <span class="live-dot"></span>
       <div class="nc-info">
         <div class="nc-label">Na TV agora</div>
@@ -608,8 +639,19 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
         <div class="nc-sub" id="nc-sub"></div>
         <div class="nc-bar"><i id="nc-bar"></i></div>
       </div>
-      <button class="btn btn-primary" id="btn-skip" onclick="skipItem()" disabled>⏭ Pular item</button>
+      <div class="nc-actions">
+        <div class="row">
+          <button class="btn btn-ghost" id="btn-back" onclick="backItem()" disabled title="Volta para o item anterior da programação">⏮ Voltar item</button>
+          <button class="btn btn-primary" id="btn-skip" onclick="skipItem()" disabled>⏭ Pular item</button>
+        </div>
+        <!-- Só aparece quando a TV está nas notícias (0.16.0) -->
+        <div class="row nc-news" id="nc-news" hidden>
+          <button class="btn btn-ghost btn-sm" onclick="newsCard(-1)" title="Volta para a manchete anterior">◀ Notícia anterior</button>
+          <button class="btn btn-ghost btn-sm" onclick="newsCard(1)" title="Passa para a próxima manchete">Próxima notícia ▶</button>
+        </div>
+      </div>
     </div>
+    <div id="shot-overlay" hidden onclick="this.hidden=true"><img id="shot-big" alt="Foto da tela da TV"><div id="shot-big-at"></div></div>
 
     <!-- Régua em edição: Todos os dias, um dia da semana ou a exceção de uma data (0.11.0) -->
     <div class="ruler-bar">
@@ -945,6 +987,11 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <div class="form-group"><label for="f-news-max">Notícias na fila</label><input type="number" id="f-news-max" value="15" min="1" max="60"></div>
         </div>
         <p class="hint" id="news-dur-hint"></p>
+        <!-- Notícias sem repetir (0.16.0): a TV anota cada manchete exibida e não repete por 3 dias -->
+        <p class="hint" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span id="news-seen-info">A TV não repete manchetes já exibidas.</span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="clearNewsSeen()" title="A TV volta a poder mostrar todas as manchetes">↺ Zerar histórico</button>
+        </p>
         <div class="form-group"><label for="f-news-accent">Cor de destaque</label><input type="color" id="f-news-accent" value="#38bdf8" style="max-width:120px"></div>
         <label class="check-line"><input type="checkbox" id="f-news-fx" checked> Mostrar a cotação do dólar no rodapé (comercial ao vivo, gráfico de 30 dias e PTAX do Banco Central)</label>
         <label class="check-line"><input type="checkbox" id="f-news-ind" checked> Mostrar indicadores no rodapé (Euro, Selic, CDI, IPCA e IGP-M 12 meses, salário mínimo) — alterna com o dólar a cada 15 s</label>
@@ -1639,6 +1686,19 @@ async function todayHint() {
 }
 
 // Tempo do item de notícias na TV = segundos por card × cards por vez (é o que vai para "duration" do item).
+// Notícias sem repetir (0.16.0): quantas manchetes a TV já mostrou (vale para todos os itens de notícias)
+async function loadNewsSeen() {
+  try {
+    const r = await api('GET', '/api/news-seen');
+    $('news-seen-info').textContent = `A TV não repete manchetes por ${r.days} dias (vale para todos os itens de notícias). ` +
+      `Já exibidas: ${r.count}. Quando as novas acabam, volta a que passou há mais tempo.`;
+  } catch(e) {}
+}
+async function clearNewsSeen() {
+  if (!confirm('Zerar o histórico? A TV volta a poder mostrar todas as manchetes, inclusive as que já passaram.')) return;
+  try { await api('DELETE', '/api/news-seen'); status('Histórico de notícias zerado'); loadNewsSeen(); }
+  catch(e) { status('Erro: ' + e.message, 'err'); }
+}
 function newsDuration() {
   const per = Math.min(120, Math.max(4, parseInt($('f-news-per').value) || NEWS_SECONDS_PER_CARD));
   const cards = Math.min(30, Math.max(1, parseInt($('f-news-cards').value) || 4));
@@ -1663,6 +1723,7 @@ function setNewsForm(c, duration) {
   $('f-news-fx').checked = c.show_fx !== false;
   $('f-news-ind').checked = c.show_ind !== false;
   $('f-news-max').value = c.max_items || 15;
+  loadNewsSeen();
   $('f-news-accent').value = c.accent || '#38bdf8';
   $('f-news-img').checked = c.show_images !== false;
   $('f-news-logo').checked = c.show_logo !== false;
@@ -3022,6 +3083,9 @@ async function refreshNow() {
 }
 function renderNow() {
   const d = NOW.data, btn = $('btn-skip');
+  renderShot();
+  $('nc-news').hidden = !(d && d.playing && d.type === 'news' && !d.stale);
+  $('btn-back').disabled = !(d && d.playing && !d.stale) || $('btn-back').dataset.busy === '1';
   if (!d || !d.playing) {
     $('nc-name').textContent = '—';
     $('nc-sub').textContent = 'O player ainda não informou o que está na tela. Ele está aberto?';
@@ -3046,6 +3110,56 @@ async function skipItem() {
   } catch(e) { status('Erro: ' + e.message, 'err'); }
   setTimeout(() => { btn.dataset.busy = ''; renderNow(); }, 2500);
 }
+// ─── Voltar item / notícia anterior e próxima (0.16.0) ───────────────────────
+async function backItem() {
+  const btn = $('btn-back'); btn.dataset.busy = '1'; btn.disabled = true;
+  try {
+    await api('POST', '/api/player/back');
+    status('Voltando ao item anterior…');
+    setTimeout(refreshNow, 1200); setTimeout(refreshNow, 3000);
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
+  setTimeout(() => { btn.dataset.busy = ''; renderNow(); }, 2500);
+}
+async function newsCard(dir) {
+  try {
+    await api('POST', '/api/player/card', {dir});
+    status(dir < 0 ? 'Voltando à notícia anterior' : 'Passando para a próxima notícia');
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+
+// ─── Foto da TV (0.16.0) ──────────────────────────────────────────────────────
+// O player manda uma foto da tela a cada 5 min. /api/player/now diz quando chegou a última (shot_ts);
+// a imagem só é baixada quando muda (precisa do login, por isso fetch + blob em vez de <img src>).
+const SHOT = {ts: 0, url: '', item: '', at: ''};
+async function refreshShot(ts) {
+  try {
+    const r = await fetch('/api/player/shot', {headers: authHeader()});
+    if (!r.ok) return;
+    const url = URL.createObjectURL(await r.blob());
+    if (SHOT.url) URL.revokeObjectURL(SHOT.url);
+    SHOT.url = url; SHOT.ts = ts;
+    $('nc-shot').src = url;
+  } catch(e) {}
+}
+function renderShot() {
+  const d = NOW.data || {};
+  if (d.shot_ts && d.shot_ts !== SHOT.ts && !SHOT.loading) {
+    SHOT.loading = true; refreshShot(d.shot_ts).finally(() => { SHOT.loading = false; });
+  }
+  SHOT.at = d.shot_at || ''; SHOT.item = d.shot_item || '';
+  const has = !!SHOT.url;
+  $('nc-shot').hidden = !has; $('nc-shot-empty').hidden = has;
+  $('nc-shot-empty').textContent = 'Sem foto da TV ainda (o player manda uma a cada 5 min)';
+  $('nc-shot-at').textContent = has ? `Última atualização em ${SHOT.at}` : '';
+  $('nc-shot-box').title = has ? `Foto das ${SHOT.at}${SHOT.item ? ' · ' + SHOT.item : ''} — clique para ampliar` : '';
+}
+function openShot() {
+  if (!SHOT.url) return;
+  $('shot-big').src = SHOT.url;
+  $('shot-big-at').textContent = `Última atualização em ${SHOT.at}${SHOT.item ? ' · ' + SHOT.item : ''} · clique para fechar`;
+  $('shot-overlay').hidden = false;
+}
+
 setInterval(() => {
   if ($('tab-schedule').hidden) return;
   NOW.ticks++;
