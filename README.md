@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.16.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.17.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -75,6 +75,7 @@ pode ser desligado no item). Sites, imagens, vídeos e mensagens aparecem sem al
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Playlists**       | Criar, renomear e **duplicar** playlists (com todos os itens); adicionar e **duplicar itens** (⧉, ou *Salvar e duplicar* no formulário); adicionar sites, imagens, vídeos, clima, trânsito, mensagens, contadores regressivos e páginas HTML locais. Arrastar para reordenar, ativar/desativar, pré-visualizar. |
 | **Programação**   | Timeline de 00:00 a 23:59, uma por **régua**: *Todos os dias*, cada dia da semana ou uma data. Arraste playlists e itens da biblioteca, mova, redimensione pelas bordas ou digite os horários. Zoom livre: do dia inteiro na tela até 1 min, com Ctrl + roda do mouse, a roda sobre a faixa de horas ou a barra. **↻ Repetir nos dias úteis** copia a régua para segunda a sexta. |
+| **Relatório**     | O que passou na TV (0.17.0): por item (quantas vezes, tempo no ar, quantas vezes foi interrompido e por quê), a linha do tempo e as manchetes exibidas. Hoje, ontem, 7 ou 30 dias ou um período; **⬇ Planilha** baixa em CSV (abre no Excel). Guarda 90 dias. |
 | **Calendário**    | O mês inteiro: qual régua vale em cada dia, feriados, datas comemorativas, avisos e playlists agendadas. Clique num dia para **adicionar um aviso**, criar uma exceção (ex.: feriado), pôr uma playlist o dia todo ou abrir a régua. |
 | **Configurações** | Cidade, coordenadas e código IBGE (clima e alertas do INMET), chave do Google Maps, cenários de teste da tela de clima.                      |
 
@@ -98,6 +99,7 @@ pode ser desligado no item). Sites, imagens, vídeos e mensagens aparecem sem al
   - **Atenção:** o feed `/rss/legislacao/` do Contábeis está parado em novembro de 2020. Enquanto for assim, o **Testar feed** mostra "nenhuma aproveitável" e nenhuma legislação entra na fila (de propósito: não aparece lei de 2020 como se fosse novidade). Se ele voltar a publicar, passa a entrar sozinho.
 - **📅 Hoje é dia (curiosidades):** "Hoje é Dia do Professor", feriado do dia e "Faltam 3 dias para o feriado". Ponha o item numa playlist ou ligue em **Configurações → Curiosidades e datas** a opção *Aparecer curiosidades durante o horário de serviço*, que intercala a tela na playlist a cada N minutos. A lista de datas é editável ali mesmo, no formato `DD/MM | Título | Texto`, também com datas móveis como `2º domingo/05`. Os feriados nacionais vêm sozinhos da BrasilAPI.
 - **📣 Avisos por data** (Calendário → clique no dia → *Adicionar aviso para este dia*): mensagem, imagem, contador ou "Hoje é dia", já preenchidos a partir do feriado ou da data comemorativa. Escolha quantos dias antes começa a aparecer, o horário (o dia todo ou só no expediente) e se repete todo ano. Datas móveis como Carnaval e Dia das Mães são acompanhadas sozinhas. O aviso é **intercalado** no que estiver no ar, inclusive durante um item avulso, sem mudar a programação.
+- **🧾 Agenda fiscal (0.17.0):** os vencimentos dos próximos dias (padrão 10), agrupados por data, com *HOJE*, *AMANHÃ* ou *EM N DIAS*, e a nota quando o prazo mudou por feriado ou fim de semana ("Antecipado: 20/11 é feriado"). Já vêm eSocial e EFD-Reinf (dia 15), salários (5º dia útil), FGTS Digital, INSS e IRRF (dia 20, antecipam), DAS/PGDAS-D e DAS-MEI (dia 20, prorrogam), PIS/Cofins (dia 25), DCTFWeb e IRPJ/CSLL (último dia útil), 13º salário e os anuais (DEFIS, IRPF, DASN-SIMEI, ECD, ECF). Ligue ou desligue cada um no item e acrescente os prazos do escritório, um por linha: `ISS Rio | 10 | prorroga`, `Alvará | 31/01 | antecipa`, `Balancete | último dia útil`. O botão **Ver a lista que vai para a TV** mostra o resultado antes de salvar. Dia útil = segunda a sexta menos os feriados nacionais (feriado municipal não entra). Os prazos ficam em `FISCAL_RULES`, no `server.py`.
 - **Contador regressivo:** título, data e hora do evento, cores e texto exibido quando a hora chega. Com *Tirar da TV depois que a hora chegar*, o item deixa de aparecer sozinho.
 - **HTML local:** envie um `.html` (página única) ou um `.zip` com a página e seus arquivos (CSS, imagens, scripts). A página inicial do `.zip` é o `index.html`. Cada envio fica em `data/html/<id>/`.
 
@@ -135,6 +137,11 @@ manchete (o item continua no ar).
 Ao lado fica a **foto da TV** (0.16.0): o player tira uma foto da tela a cada 5 minutos e o painel mostra
 "Última atualização em HH:MM". Clique na foto para ampliar. A foto fica só na memória do servidor (some ao
 reiniciar) e só aparece para quem entrou com a senha do painel.
+
+**📢 Aviso urgente** (0.17.0), no mesmo cartão: escreva um texto (ou escolha uma sugestão, como "Cliente na
+recepção"), escolha por quanto tempo (1 min a 1 h) e a cor (atenção, urgente ou aviso). A TV interrompe o que estiver
+passando, mostra o aviso em tela cheia e, quando o tempo acaba ou alguém clica em **Encerrar aviso** (ou em *Pular
+item*), volta para o item que foi interrompido. O aviso fica só na memória do servidor: reiniciar encerra.
 
 Salvar algo no painel não faz a TV recomeçar a playlist. O item na tela continua, e só aparece de novo se foi
 ele o editado. A playlist só recomeça do 1º item quando a programação troca de bloco.

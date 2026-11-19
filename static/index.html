@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.16.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.17.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,6 +9,8 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.16.0 (antes da agenda fiscal, do aviso urgente e da aba Relatório):
+        git checkout a1bb3b8 -- static/index.html server.py player.py   (ou copie backup_v0.17.0_20261119/)
     Para a 0.15.0 (antes da foto da TV, dos botões Voltar/Notícia e das notícias sem repetir):
         git checkout d2733ea -- static/index.html server.py player.py   (ou copie backup_v0.16.0_20261119/)
     Para a 0.14.0 (antes dos avisos de login/Waze e dos indicadores no rodapé):
@@ -77,6 +79,12 @@
       foto da TV (0.16.0) .......... #nc-shot, #nc-shot-at ("Última atualização em HH:MM"), refreshShot() →
                                      GET /api/player/shot (a cada 5 min o player manda uma); clique = #shot-overlay
       histórico de notícias ........ #news-seen-info, loadNewsSeen(), clearNewsSeen() → /api/news-seen (0.16.0)
+      aviso urgente (0.17.0) ....... #btn-urgent → openUrgent(), #urgent-modal, URGENT_PRESETS, sendUrgent() → POST
+                                     /api/urgent; #nc-urgent (no ar até HH:MM) → stopUrgent() → DELETE /api/urgent
+    Agenda fiscal (0.17.0) ......... tipo "fiscal": #cfg-fiscal, FISCAL (regras de GET /api/fiscal/rules), setFiscalForm(),
+                                     getFiscalConfig(), testFiscal() → POST /api/fiscal-test; tela /view/fiscal/{id}
+    Aba Relatório (0.17.0) ......... #tab-report, REPORT, loadReport() → GET /api/report, reportRange(), downloadReport()
+                                     → GET /api/report.csv (kind=timeline | news)
       biblioteca arrastável ........ renderLibrary(), .chip
       régua, trilhas, zoom ......... renderRuler(), .track, PXH, TL.pxh (zoom contínuo) e TL.zoom (passo da grade)
       zoom com o mouse ............. #zoom-seg (atalhos Dia todo…1 min), .zoom-ctl (#zoom-range, −/+), applyZoom(),
@@ -453,6 +461,33 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 .nc-bar{height:4px;border-radius:2px;background:var(--grid-strong);margin-top:8px;overflow:hidden}
 .nc-bar i{display:block;height:100%;width:0;background:var(--accent);transition:width 1s linear}
 @media(max-width:700px){.now-card{flex-wrap:wrap}.now-card .btn{width:100%;justify-content:center}}
+/* Agenda fiscal (0.17.0) */
+.fiscal-rules{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px}
+.fiscal-rules .check-line{font-size:13px;align-items:flex-start}
+.fiscal-rules small{display:block;color:var(--muted);font-size:11.5px}
+@media(max-width:700px){.fiscal-rules{grid-template-columns:1fr}}
+/* Aviso urgente (0.17.0) */
+.nc-urgent{display:flex;align-items:center;gap:10px;padding:8px 12px;margin:-4px 0 12px;border-radius:10px;font-size:13.5px;
+  background:color-mix(in srgb,#ef4444 14%,transparent);border:1px solid color-mix(in srgb,#ef4444 50%,transparent)}
+.nc-urgent[hidden]{display:none}
+.nc-urgent b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.urg-presets{display:flex;flex-wrap:wrap;gap:6px}
+.urg-styles{display:flex;gap:8px;flex-wrap:wrap}
+.urg-styles label{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px}
+/* Relatório (0.17.0) */
+.rep-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.rep-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.rep-kpi{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
+.rep-kpi b{display:block;font-size:22px;font-family:'Space Grotesk',sans-serif}
+.rep-kpi span{font-size:12px;color:var(--muted)}
+.rep-tbl{width:100%;border-collapse:collapse;font-size:13px}
+.rep-tbl th{text-align:left;font-weight:600;color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+  padding:6px 8px;border-bottom:1px solid var(--border)}
+.rep-tbl td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+.rep-tbl td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.rep-tbl .bad{color:var(--warn)}
+.rep-scroll{max-height:420px;overflow:auto}
+.rep-bar-fill{height:6px;border-radius:3px;background:var(--accent);opacity:.75}
 /* Foto da TV (0.16.0): miniatura 16:9 da última foto que o player mandou (a cada 5 min) */
 .nc-shot{flex:0 0 auto;width:208px;display:flex;flex-direction:column;gap:4px}
 .nc-shot .shot-box{width:208px;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:#0b1120;border:1px solid var(--border);
@@ -590,9 +625,10 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn active" onclick="showTab('playlists')" id="nb-playlists"><span class="ic">▶</span> Playlists</button>
     <button class="nav-btn" onclick="showTab('schedule')" id="nb-schedule"><span class="ic">◷</span> Programação</button>
     <button class="nav-btn" onclick="showTab('calendar')" id="nb-calendar"><span class="ic">▦</span> Calendário</button>
+    <button class="nav-btn" onclick="showTab('report')" id="nb-report"><span class="ic">▤</span> Relatório</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.16.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.17.0</div>
 </aside>
 
 <div class="main">
@@ -644,6 +680,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <button class="btn btn-ghost" id="btn-back" onclick="backItem()" disabled title="Volta para o item anterior da programação">⏮ Voltar item</button>
           <button class="btn btn-primary" id="btn-skip" onclick="skipItem()" disabled>⏭ Pular item</button>
         </div>
+        <button class="btn btn-ghost btn-sm" id="btn-urgent" onclick="openUrgent()" title="Mostra um texto na TV por cima da programação">📢 Aviso urgente</button>
         <!-- Só aparece quando a TV está nas notícias (0.16.0) -->
         <div class="row nc-news" id="nc-news" hidden>
           <button class="btn btn-ghost btn-sm" onclick="newsCard(-1)" title="Volta para a manchete anterior">◀ Notícia anterior</button>
@@ -651,6 +688,9 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
         </div>
       </div>
     </div>
+    <!-- Aviso urgente no ar (0.17.0) -->
+    <div class="nc-urgent" id="nc-urgent" hidden>📢 <b id="nc-urgent-text"></b><span id="nc-urgent-until" class="hint"></span>
+      <button class="btn btn-ghost btn-sm" onclick="stopUrgent()">Encerrar aviso</button></div>
     <div id="shot-overlay" hidden onclick="this.hidden=true"><img id="shot-big" alt="Foto da tela da TV"><div id="shot-big-at"></div></div>
 
     <!-- Régua em edição: Todos os dias, um dia da semana ou a exceção de uma data (0.11.0) -->
@@ -762,6 +802,40 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
   </div>
 
   <!-- ═══ Aba Configurações ═══ -->
+  <!-- ═══ Aba Relatório (0.17.0): o que passou na TV ═══ -->
+  <div class="content" id="tab-report" hidden>
+    <div class="rep-bar">
+      <button class="btn btn-ghost btn-sm" onclick="reportRange(0)">Hoje</button>
+      <button class="btn btn-ghost btn-sm" onclick="reportRange(1)">Ontem</button>
+      <button class="btn btn-ghost btn-sm" onclick="reportRange(7)">Últimos 7 dias</button>
+      <button class="btn btn-ghost btn-sm" onclick="reportRange(30)">Últimos 30 dias</button>
+      <span class="hint">de</span><input type="date" id="rep-start" onchange="loadReport()">
+      <span class="hint">até</span><input type="date" id="rep-end" onchange="loadReport()">
+      <span style="flex:1"></span>
+      <button class="btn btn-ghost btn-sm" onclick="downloadReport('timeline')">⬇ Planilha da exibição</button>
+      <button class="btn btn-ghost btn-sm" onclick="downloadReport('news')">⬇ Planilha das manchetes</button>
+    </div>
+    <div class="rep-kpis" id="rep-kpis"></div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="section-title">Por item</div>
+      <div class="rep-scroll"><table class="rep-tbl"><thead><tr><th>Item</th><th style="width:28%"></th><th class="num">Vezes</th>
+        <th class="num">Tempo no ar</th><th class="num">Interrompido</th><th class="num">Pulado</th><th>Por quê</th></tr></thead>
+        <tbody id="rep-items"></tbody></table></div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="section-title">Linha do tempo</div>
+      <div class="rep-scroll"><table class="rep-tbl"><thead><tr><th>Início</th><th>Item</th><th>Programação</th>
+        <th class="num">Previsto</th><th class="num">No ar</th><th>Como terminou</th></tr></thead><tbody id="rep-timeline"></tbody></table></div>
+    </div>
+    <div class="card">
+      <div class="section-title">Manchetes exibidas</div>
+      <div class="rep-scroll"><table class="rep-tbl"><thead><tr><th>Quando</th><th>Manchete</th><th>Fonte</th><th>Item</th></tr></thead>
+        <tbody id="rep-news"></tbody></table></div>
+    </div>
+    <p class="hint" style="margin-top:10px">O relatório guarda os últimos 90 dias. Os números contam o que o player informou: com o
+      player fechado, nada entra.</p>
+  </div>
+
   <div class="content" id="tab-settings" hidden>
     <!-- Sistema: versão e atualização pelo painel (0.14.0) -->
     <div class="card" id="card-system" style="margin-bottom:16px">
@@ -882,6 +956,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <button class="type-tab" data-type="html" onclick="setType('html')">📄 HTML local</button>
           <button class="type-tab" data-type="news" onclick="setType('news')">📰 Notícias</button>
           <button class="type-tab" data-type="today" onclick="setType('today')">📅 Hoje é dia</button>
+          <button class="type-tab" data-type="fiscal" onclick="setType('fiscal')">🧾 Agenda fiscal</button>
         </div>
       </div>
 
@@ -960,6 +1035,27 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           e quantos dias faltam para o próximo feriado. Em dia sem nada para mostrar, a TV pula este item sozinha.<br><br>
           A lista de datas e as <b>curiosidades automáticas durante o horário de serviço</b> ficam em
           <a href="#" onclick="closeModal();showTab('settings');setTimeout(()=>$('card-today').scrollIntoView({behavior:'smooth'}),100);return false">Configurações → Curiosidades e datas</a>.</p>
+      </div>
+
+      <!-- Agenda fiscal (0.17.0): vencimentos dos próximos dias -->
+      <div id="cfg-fiscal" hidden class="form-group" style="gap:12px">
+        <div class="row3">
+          <div class="form-group"><label for="f-fiscal-days">Mostrar os próximos (dias)</label>
+            <input type="number" id="f-fiscal-days" value="10" min="1" max="60"></div>
+          <div class="form-group"><label for="f-fiscal-per">Segundos por página</label>
+            <input type="number" id="f-fiscal-per" value="15" min="5" max="120"></div>
+        </div>
+        <label>Obrigações <span class="hint">(prazo de cada uma e o que acontece em feriado/fim de semana)</span></label>
+        <div id="fiscal-rules" class="fiscal-rules"></div>
+        <div class="form-group"><label for="f-fiscal-custom">Prazos do escritório <span class="hint">(um por linha: Nome | dia | antecipa ou prorroga)</span></label>
+          <textarea id="f-fiscal-custom" rows="3" placeholder="ISS Rio | 10 | prorroga&#10;Alvará de funcionamento | 31/01 | antecipa&#10;Fechamento do balancete | último dia útil"></textarea></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="testFiscal()">🔎 Ver a lista que vai para a TV</button>
+          <span class="hint">Dia útil = segunda a sexta, menos os feriados nacionais. Feriado municipal não entra.</span>
+        </div>
+        <pre class="news-test" id="fiscal-test" hidden></pre>
+        <p class="hint">Prazos conferidos em 19/11/2026 (DCTFWeb no último dia útil do mês seguinte, IN RFB 2.248/2025).
+          Os anuais (IRPF, ECD) mudam por ato da Receita a cada ano: confira a agenda tributária oficial.</p>
       </div>
 
       <div id="cfg-news" hidden class="form-group" style="gap:12px">
@@ -1178,6 +1274,35 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
   </div>
 </div>
 
+<!-- ═══ Aviso urgente (0.17.0) ═══ -->
+<div class="overlay top" id="urgent-modal" hidden>
+  <div class="modal" style="width:520px" role="dialog" aria-modal="true" aria-labelledby="urg-title">
+    <div class="modal-header"><div><div class="modal-title" id="urg-title">📢 Aviso urgente na TV</div>
+      <div class="modal-sub">Passa por cima da programação e depois a TV volta sozinha para onde estava.</div></div></div>
+    <div class="modal-body">
+      <div class="urg-presets" id="urg-presets"></div>
+      <div class="form-group"><label for="f-urg-text">Texto <span class="hint">(até 240 letras)</span></label>
+        <textarea id="f-urg-text" rows="3" maxlength="240" placeholder="Ex.: Reunião geral às 15h na sala 2"></textarea></div>
+      <div class="form-group"><label for="f-urg-sub">Linha de baixo <span class="hint">(opcional)</span></label>
+        <input id="f-urg-sub" maxlength="160" placeholder="Ex.: Tragam o relatório do mês"></div>
+      <div class="row3">
+        <div class="form-group"><label for="f-urg-min">Por quanto tempo</label>
+          <select id="f-urg-min"><option value="1">1 minuto</option><option value="2">2 minutos</option><option value="5" selected>5 minutos</option>
+            <option value="10">10 minutos</option><option value="15">15 minutos</option><option value="30">30 minutos</option><option value="60">1 hora</option></select></div>
+      </div>
+      <div class="urg-styles">
+        <label><input type="radio" name="urg-style" value="alert" checked> ⚠️ Atenção (amarelo)</label>
+        <label><input type="radio" name="urg-style" value="urgent"> 🚨 Urgente (vermelho)</label>
+        <label><input type="radio" name="urg-style" value="info"> 📢 Aviso (azul)</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="$('urgent-modal').hidden = true">Cancelar</button>
+      <button class="btn btn-primary" id="btn-urg-send" onclick="sendUrgent()">Mostrar na TV agora</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ Login ═══ -->
 <div class="overlay top" id="login-overlay" hidden>
   <div class="modal" style="width:380px">
@@ -1209,9 +1334,9 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const uid = () => Math.random().toString(16).slice(2, 14).padEnd(12, '0');
-const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬',countdown:'⏳',html:'📄',news:'📰',today:'📅'};
-const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem',countdown:'Contador',html:'HTML local',news:'Notícias',today:'Hoje é dia'};
-const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e',countdown:'#14b8a6',html:'#ef4444',news:'#65a30d',today:'#d97706'};
+const TYPE_ICONS = {url:'🌐',image:'🖼',video:'🎬',weather:'🌤',traffic:'🚗',message:'💬',countdown:'⏳',html:'📄',news:'📰',today:'📅',fiscal:'🧾',urgent:'📢'};
+const TYPE_NAMES = {url:'Site',image:'Imagem',video:'Vídeo',weather:'Clima',traffic:'Trânsito',message:'Mensagem',countdown:'Contador',html:'HTML local',news:'Notícias',today:'Hoje é dia',fiscal:'Agenda fiscal'};
+const TYPE_COLORS = {url:'#3b82f6',image:'#a855f7',video:'#ec4899',weather:'#06b6d4',traffic:'#f59e0b',message:'#22c55e',countdown:'#14b8a6',html:'#ef4444',news:'#65a30d',today:'#d97706',fiscal:'#0ea5e9'};
 const ALL_TYPES = Object.keys(TYPE_NAMES);
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch(e) { return null; } },
@@ -1398,6 +1523,8 @@ function itemMeta(item) {
   if (item.type === 'html') return esc(c.file || (c.url || '').split('/').pop());
   if (item.type === 'countdown') return esc(c.title || '') + (c.target ? ` · até ${esc(fmtDateTime(c.target))}` : '');
   if (item.type === 'news') return esc((c.feeds || []).map(u => NEWS_FEEDS.find(f => f.url === u)?.name || new URL(u).hostname).join(', '));
+  if (item.type === 'fiscal') return `próximos ${c.days || 10} dias · ${Array.isArray(c.rules) ? c.rules.length + ' obrigações' : 'todas as obrigações'}`
+    + ((c.custom || '').trim() ? ' + do escritório' : '');
   return '';
 }
 
@@ -1588,6 +1715,7 @@ function openEdit(id) {
   if (item.type === 'message') setMsgForm(c);
   if (item.type === 'news') setNewsForm(c, item.duration);
   if (item.type === 'today') { $('f-today-per').value = c.per_card || TODAY_SECONDS_PER_CARD; todayHint(); }
+  if (item.type === 'fiscal') setFiscalForm(c);
   if (c.notice) setNoticeFromItem(item);
   $('modal').hidden = false;
   if (item.type === 'message') msgPreviewSoon();
@@ -1686,6 +1814,92 @@ async function todayHint() {
 }
 
 // Tempo do item de notícias na TV = segundos por card × cards por vez (é o que vai para "duration" do item).
+// ─── Agenda fiscal (0.17.0) ───────────────────────────────────────────────────
+// As regras (prazo de cada obrigação) vêm do servidor (FISCAL_RULES em server.py). O item guarda só os ids ligados.
+let FISCAL = {rules: [], default_on: []};
+async function loadFiscalRules() {
+  if (!FISCAL.rules.length) { try { FISCAL = await api('GET', '/api/fiscal/rules'); } catch(e) {} }
+  return FISCAL;
+}
+function fiscalRuleText(r) {
+  const adj = {prev: 'antecipa se não for dia útil', next: 'prorroga se não for dia útil'}[r.adjust] || '';
+  const when = r.last_bd ? 'último dia útil' : r.nth_bd ? `${r.nth_bd}º dia útil` : `dia ${r.day}`;
+  const mes = r.month ? ` de ${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][r.month - 1]} (anual)` : '';
+  return `${when}${mes}${adj ? ' · ' + adj : ''}`;
+}
+async function setFiscalForm(c) {
+  $('f-fiscal-days').value = c.days || 10;
+  $('f-fiscal-per').value = c.per_page || 15;
+  $('f-fiscal-custom').value = c.custom || '';
+  $('fiscal-test').hidden = true;
+  const F = await loadFiscalRules(), on = Array.isArray(c.rules) ? c.rules : F.default_on;
+  $('fiscal-rules').innerHTML = F.rules.map(r => `<label class="check-line"><input type="checkbox" data-fr="${esc(r.id)}"
+    ${on.includes(r.id) ? 'checked' : ''}><span>${esc(r.name)}<small>${esc(fiscalRuleText(r))}</small></span></label>`).join('');
+}
+function getFiscalConfig() {
+  return {days: parseInt($('f-fiscal-days').value) || 10, per_page: parseInt($('f-fiscal-per').value) || 15,
+          rules: [...document.querySelectorAll('#fiscal-rules input[data-fr]:checked')].map(x => x.dataset.fr),
+          custom: $('f-fiscal-custom').value};
+}
+async function testFiscal() {
+  const out = $('fiscal-test'); out.hidden = false; out.textContent = 'Calculando…';
+  try {
+    const r = await api('POST', '/api/fiscal-test', getFiscalConfig());
+    const fmt = d => d.split('-').reverse().slice(0, 2).join('/');
+    const lines = r.items.map(i => `${fmt(i.date)} (${i.weekday.slice(0, 3)}) ${i.in_days === 0 ? 'HOJE' : i.in_days === 1 ? 'AMANHÃ' : 'em ' + i.in_days + ' dias'}`
+      + ` — ${i.name}${i.note ? '  [' + i.note + ']' : ''}`);
+    out.textContent = (lines.length ? lines.join('\n') : `Nenhum vencimento nos próximos ${r.days} dias.`)
+      + (r.errors.length ? '\n\n⚠ ' + r.errors.join('\n⚠ ') : '');
+  } catch(e) { out.textContent = 'Erro: ' + e.message; }
+}
+
+// ─── Relatório (0.17.0) ───────────────────────────────────────────────────────
+// O que passou na TV: por item (vezes, tempo, interrupções), linha do tempo e manchetes. Dados de GET /api/report.
+const isoDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function reportRange(days) {
+  const end = new Date(), start = new Date();
+  if (days === 1) { end.setDate(end.getDate() - 1); start.setDate(start.getDate() - 1); }
+  else if (days > 1) start.setDate(start.getDate() - (days - 1));
+  $('rep-start').value = isoDay(start); $('rep-end').value = isoDay(end);
+  loadReport();
+}
+const hms = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${String(Math.floor(s % 3600 / 60)).padStart(2, '0')} min`
+  : s >= 60 ? `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s` : `${s} s`;
+async function loadReport() {
+  let r;
+  try { r = await api('GET', `/api/report?start=${$('rep-start').value}&end=${$('rep-end').value}`); }
+  catch(e) { status('Erro ao carregar o relatório: ' + e.message, 'err'); return; }
+  const T = r.totals;
+  $('rep-kpis').innerHTML = [[hms(T.seconds), 'tempo de TV registrado'], [T.shows, 'itens exibidos'],
+    [T.interrupted, 'interrompidos (pulados, login, Waze…)'], [T.skipped, 'pulados sem ir à tela'],
+    [`${T.news_unique}`, `manchetes diferentes (${T.news} exibições)`]]
+    .map(([v, l]) => `<div class="rep-kpi"><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
+  const max = Math.max(1, ...r.items.map(i => i.seconds));
+  $('rep-items').innerHTML = r.items.map(i => `<tr><td>${TYPE_ICONS[i.type] || '▶'} ${esc(i.name)}</td>
+    <td><div class="rep-bar-fill" style="width:${Math.max(2, i.seconds / max * 100)}%"></div></td>
+    <td class="num">${i.shows}</td><td class="num">${hms(i.seconds)}</td>
+    <td class="num ${i.interrupted ? 'bad' : ''}">${i.interrupted}</td><td class="num ${i.skipped ? 'bad' : ''}">${i.skipped}</td>
+    <td class="hint">${esc(Object.entries(i.reasons).map(([k, v]) => `${k}: ${v}`).join(' · '))}</td></tr>`).join('')
+    || '<tr><td colspan="7" class="hint">Nada registrado neste período. O player estava aberto?</td></tr>';
+  $('rep-timeline').innerHTML = r.timeline.slice().reverse().slice(0, 500).map(t => `<tr><td class="num">${esc(t.start)}</td>
+    <td>${TYPE_ICONS[t.type] || '▶'} ${esc(t.name)}</td><td class="hint">${esc(t.source)}</td>
+    <td class="num">${t.planned ? hms(t.planned) : ''}</td><td class="num">${hms(t.seconds)}</td>
+    <td class="${['tempo', 'no_ar', 'video_fim'].includes(t.reason) ? 'hint' : 'bad'}">${esc(t.reason_txt)}</td></tr>`).join('')
+    || '<tr><td colspan="6" class="hint">—</td></tr>';
+  $('rep-news').innerHTML = r.news.slice().reverse().slice(0, 500).map(n => `<tr><td class="num">${esc(n.at)}</td><td>${esc(n.title)}</td>
+    <td class="hint">${esc(n.source)}</td><td class="hint">${esc(n.item)}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="hint">Nenhuma manchete registrada neste período.</td></tr>';
+}
+async function downloadReport(kind) {
+  try {
+    const r = await fetch(`/api/report.csv?kind=${kind}&start=${$('rep-start').value}&end=${$('rep-end').value}`, {headers: authHeader()});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const name = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || `relatorio_${kind}.csv`;
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch(e) { status('Erro ao baixar: ' + e.message, 'err'); }
+}
+
 // Notícias sem repetir (0.16.0): quantas manchetes a TV já mostrou (vale para todos os itens de notícias)
 async function loadNewsSeen() {
   try {
@@ -1957,10 +2171,12 @@ function setType(t) {
   document.querySelectorAll('.type-tab').forEach(b => b.classList.toggle('active', b.dataset.type === t));
   showCfgPanel(t);
   const names = {url:'Site', image:'Imagem', video:'Vídeo', weather:'Previsão do Tempo', traffic:'Trânsito',
-                 message:'Mensagem', countdown:'Contador regressivo', html:'Página HTML', news:'Notícias', today:'Hoje é dia'};
+                 message:'Mensagem', countdown:'Contador regressivo', html:'Página HTML', news:'Notícias', today:'Hoje é dia',
+                 fiscal:'Agenda fiscal'};
   if (!$('f-name').value || Object.values(names).includes($('f-name').value)) $('f-name').value = names[t];
-  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30, news:45, today:15}[t] || 30;
+  $('f-duration').value = {url:30, image:15, video:60, weather:25, traffic:25, message:15, countdown:15, html:30, news:45, today:15, fiscal:30}[t] || 30;
   if (t === 'news') setNewsForm({});
+  if (t === 'fiscal') setFiscalForm({});
   if (t === 'message') msgPreviewSoon();
   if (NOTICE) noticePreset(true);   // aviso por data: preenche a partir do feriado/data escolhido
 }
@@ -1995,6 +2211,8 @@ async function saveItem(dup) {   // dup = "Salvar e duplicar": salva e abre a c�
     else if (editId) config = {...(itemById(editId)?.config || {})};
     else { status('Selecione um arquivo', 'err'); return; }
     if (currentType === 'video') config.loop = $('f-vid-loop').checked;
+  } else if (currentType === 'fiscal') {
+    config = getFiscalConfig();
   } else if (currentType === 'today') {
     config = {per_card: todayPer()};           // o player calcula o tempo: por card × cards do dia
   } else if (currentType === 'news') {
@@ -3084,6 +3302,9 @@ async function refreshNow() {
 function renderNow() {
   const d = NOW.data, btn = $('btn-skip');
   renderShot();
+  const u = d && d.urgent;                         // aviso urgente no ar (0.17.0)
+  $('nc-urgent').hidden = !u;
+  if (u) { $('nc-urgent-text').textContent = u.text; $('nc-urgent-until').textContent = `no ar até ${u.until_txt}`; }
   $('nc-news').hidden = !(d && d.playing && d.type === 'news' && !d.stale);
   $('btn-back').disabled = !(d && d.playing && !d.stale) || $('btn-back').dataset.busy === '1';
   if (!d || !d.playing) {
@@ -3125,6 +3346,32 @@ async function newsCard(dir) {
     await api('POST', '/api/player/card', {dir});
     status(dir < 0 ? 'Voltando à notícia anterior' : 'Passando para a próxima notícia');
   } catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+
+// ─── Aviso urgente (0.17.0) ───────────────────────────────────────────────────
+// Um texto por cima da programação por N minutos. O servidor guarda só na memória; "Encerrar" (ou "Pular item")
+// tira do ar e a TV volta para o item que foi interrompido.
+const URGENT_PRESETS = ['Reunião geral em 5 minutos', 'Cliente na recepção', 'Sistema da Receita Federal fora do ar',
+  'Favor atender o telefone', 'Café na copa ☕', 'Prazo do DAS termina hoje'];
+function openUrgent() {
+  $('urg-presets').innerHTML = URGENT_PRESETS.map(t =>
+    `<button type="button" class="btn btn-ghost btn-sm" onclick="$('f-urg-text').value=this.textContent">${esc(t)}</button>`).join('');
+  $('urgent-modal').hidden = false; setTimeout(() => $('f-urg-text').focus(), 50);
+}
+async function sendUrgent() {
+  const text = $('f-urg-text').value.trim();
+  if (!text) { status('Escreva o texto do aviso', 'err'); return; }
+  const style = document.querySelector('input[name="urg-style"]:checked')?.value || 'alert';
+  try {
+    const r = await api('POST', '/api/urgent', {text, sub: $('f-urg-sub').value.trim(), minutes: +$('f-urg-min').value, style});
+    $('urgent-modal').hidden = true; $('f-urg-text').value = ''; $('f-urg-sub').value = '';
+    status(`Aviso no ar até ${r.urgent.until_txt}` + (r.players ? '' : ' (o player pode levar até 5 s)'));
+    setTimeout(refreshNow, 1500); setTimeout(refreshNow, 4000);
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
+}
+async function stopUrgent() {
+  try { await api('DELETE', '/api/urgent'); status('Aviso encerrado — a TV volta para a programação'); setTimeout(refreshNow, 1500); }
+  catch(e) { status('Erro: ' + e.message, 'err'); }
 }
 
 // ─── Foto da TV (0.16.0) ──────────────────────────────────────────────────────
@@ -3191,7 +3438,7 @@ function cycleTheme() {
 applyTheme(currentTheme());
 
 // ═══ NAVEGAÇÃO E INICIALIZAÇÃO ════════════════════════════════════════════════
-const TITLES = {playlists: 'Playlists', schedule: 'Programação', calendar: 'Calendário', settings: 'Configurações'};
+const TITLES = {playlists: 'Playlists', schedule: 'Programação', calendar: 'Calendário', report: 'Relatório', settings: 'Configurações'};
 function showTab(tab) {
   Object.keys(TITLES).forEach(t => {
     $(`tab-${t}`).hidden = t !== tab;
@@ -3203,6 +3450,7 @@ function showTab(tab) {
   if (tab === 'settings') loadSettings().catch(() => {});
   if (tab === 'calendar') loadCalendar().catch(e => status('Erro ao carregar o calendário: ' + e.message, 'err'));
   if (tab === 'schedule') refreshNow();
+  if (tab === 'report') { if (!$('rep-start').value) reportRange(0); else loadReport(); }
   if (tab === 'schedule') loadTimeline().catch(e => status('Erro ao carregar a programação: ' + e.message, 'err'));
 }
 

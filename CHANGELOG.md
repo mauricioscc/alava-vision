@@ -7,6 +7,16 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.17.0] — 2026-11-19
+#### Adicionado
+- **🧾 Agenda fiscal** (novo tipo de item): os vencimentos dos próximos dias, agrupados por data, com *HOJE / AMANHÃ / EM N DIAS* e a nota quando o prazo foi antecipado ou prorrogado por feriado ou fim de semana. São 18 obrigações prontas (eSocial, EFD-Reinf, salários no 5º dia útil, FGTS Digital, INSS, IRRF, DAS/PGDAS-D, DAS-MEI, PIS/Cofins, DCTFWeb, IRPJ/CSLL, 13º salário, DEFIS, IRPF, DASN-SIMEI, ECD, ECF), que podem ser ligadas e desligadas, além dos prazos do próprio escritório (`Nome | dia | antecipa/prorroga`). Prazos conferidos em 19/11/2026; a DCTFWeb já segue a IN RFB 2.248/2025 (último dia útil do mês seguinte).
+- **📢 Aviso urgente:** botão em *Na TV agora* que põe um texto na TV por cima da programação por 1 min a 1 h (com sugestões prontas e três cores). Quando acaba, ou com *Encerrar aviso* / *Pular item*, a TV volta ao item que foi interrompido.
+- **Aba Relatório:** o que passou na TV por item (vezes, tempo no ar, interrupções e o motivo de cada uma: pulado, voltou, login, Waze, aviso urgente…), a linha do tempo e as manchetes exibidas, por dia ou período, com planilhas CSV para o Excel. Guarda 90 dias (tabelas `play_log` e `news_log` no banco).
+#### Observação
+- O player precisa ser reiniciado para mostrar o aviso urgente e mandar os motivos para o relatório (o *Atualizar agora* já faz isso).
+#### Como reverter
+- `git checkout a1bb3b8 -- server.py player.py static/index.html` ou copie `backup_v0.17.0_20261119/`. As tabelas novas ficam no banco e a 0.16.0 só as ignora.
+
 ### [0.16.0] — 2026-11-19
 #### Adicionado
 - **Foto da TV no painel.** Ao lado de *Na TV agora* aparece uma foto da tela da TV, tirada pelo player a cada 5 minutos, com "Última atualização em HH:MM". Clique para ampliar. A foto mostra exatamente o que está na TV (inclusive o Acessórias e o Waze, que não abrem em prévia). Fica só na memória do servidor e só aparece com a senha do painel.
