@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.14.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.15.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,6 +9,8 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.14.0 (antes dos avisos de login/Waze e dos indicadores no rodapé):
+        git checkout d484a6f -- static/index.html server.py player.py   (ou copie backup_v0.14.0_20261119/)
     Para a 0.13.0 (antes do botão Atualizar sistema e do tempo por card no "Hoje é dia"):
         git checkout 66da439 -- static/index.html server.py player.py atualizar.bat
         (ou copie backup_v0.13.0_20261119/ por cima dos atuais)
@@ -56,6 +58,9 @@
                                      refreshVoiceOptions(), listenMsg() → POST /api/tts-preview
       buscar imagens na web ........ #img-picker, openImagePicker(), runImageSearch(), pickImage()
                                      → GET /api/image-search, POST /api/image-import (nome do item obrigatório)
+    Avisos da TV (0.15.0) .......... #alerts-bar (todas as abas), refreshAlerts() → GET /api/player/alerts (a cada 30 s);
+                                     ALERT_HELP (passo a passo do login: ferramentas\login_na_tv.bat);
+                                     item Site: #f-url-login → config.login_watch; notícias: #f-news-ind → config.show_ind
     Sistema: atualizar (0.14.0) .... #card-system (Configurações), loadSystemInfo() → GET /api/system/info[?check=1],
                                      runUpdate() → POST /api/system/update, waitServerBack() (recarrega quando o "boot"
                                      do servidor muda), #upd-overlay
@@ -167,6 +172,16 @@ button,input,select,textarea{font-family:inherit}
 .top-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .content{padding:24px 28px;flex:1;min-width:0}
 
+/* Avisos da TV (0.15.0): faixa amarela no topo de todas as abas */
+.alerts-bar{display:flex;flex-direction:column;gap:8px;margin:0 0 14px}
+.alerts-bar[hidden]{display:none}
+.alert-row{border:1px solid color-mix(in srgb,#f59e0b 55%,var(--border));background:color-mix(in srgb,#f59e0b 12%,var(--surface));
+  border-radius:10px;padding:10px 14px;font-size:13.5px;line-height:1.5}
+.alert-row b{color:var(--text)}
+.alert-row details{margin-top:6px}
+.alert-row summary{cursor:pointer;font-weight:600}
+.alert-row ol{margin:6px 0 0 18px}
+.alert-row code{font-size:12px;background:var(--card);padding:1px 5px;border-radius:4px;word-break:break-all}
 .live-pill{display:inline-flex;align-items:center;gap:8px;padding:5px 12px;border-radius:20px;font-size:12.5px;
   border:1px solid var(--border);color:var(--soft);background:var(--card);max-width:420px}
 .live-pill b{color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -553,7 +568,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('calendar')" id="nb-calendar"><span class="ic">▦</span> Calendário</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.14.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.15.0</div>
 </aside>
 
 <div class="main">
@@ -565,6 +580,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
       <button class="btn btn-primary" onclick="openAddModal()" id="add-btn">+ Adicionar item</button>
     </div>
   </header>
+  <div class="alerts-bar" id="alerts-bar" hidden></div>   <!-- avisos da TV (0.15.0) -->
 
   <!-- ═══ Aba Playlists ═══ -->
   <div class="content" id="tab-playlists">
@@ -857,6 +873,8 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
           <input type="url" id="f-url" placeholder="https://exemplo.com">
           <button class="btn btn-ghost" type="button" onclick="previewUrlField()">Pré-visualizar</button>
         </div>
+        <label class="check-line" style="margin-top:8px"><input type="checkbox" id="f-url-login" checked>
+          Avisar no painel e pular o site quando ele abrir na tela de login (ex.: sessão do Acessórias expirada)</label>
       </div>
 
       <div id="cfg-image" hidden class="form-group">
@@ -929,6 +947,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
         <p class="hint" id="news-dur-hint"></p>
         <div class="form-group"><label for="f-news-accent">Cor de destaque</label><input type="color" id="f-news-accent" value="#38bdf8" style="max-width:120px"></div>
         <label class="check-line"><input type="checkbox" id="f-news-fx" checked> Mostrar a cotação do dólar no rodapé (comercial ao vivo, gráfico de 30 dias e PTAX do Banco Central)</label>
+        <label class="check-line"><input type="checkbox" id="f-news-ind" checked> Mostrar indicadores no rodapé (Euro, Selic, CDI, IPCA e IGP-M 12 meses, salário mínimo) — alterna com o dólar a cada 15 s</label>
         <label class="check-line"><input type="checkbox" id="f-news-img" checked> Mostrar a foto da notícia</label>
         <label class="check-line"><input type="checkbox" id="f-news-logo" checked> Mostrar a logo da Alava no cabeçalho</label>
         <div class="form-group"><label for="f-news-block">Ocultar notícias com estas palavras <span class="hint">(separadas por vírgula)</span></label>
@@ -1199,6 +1218,32 @@ function status(msg, type = 'ok') {
   el.textContent = msg; el.className = type; el.hidden = false;
   clearTimeout(statusTimer);
   statusTimer = setTimeout(() => { el.hidden = true; }, 3200);
+}
+
+// ─── Avisos da TV (0.15.0) ────────────────────────────────────────────────────
+// O player avisa quando PULA um item que não pode ir ao ar (site no login, Waze fora). A faixa aparece em
+// todas as abas e some sozinha quando o player confirma que voltou a funcionar.
+const ALERT_HELP = {
+  login: (a, dir) => `<details><summary>Como resolver (2 minutos, no computador da TV)</summary><ol>
+    <li>No computador da TV, abra a pasta do Alava Vision${dir ? ` (<code>${esc(dir)}</code>)` : ''}, entre em <b>ferramentas</b>
+      e dê dois cliques em <b>login_na_tv.bat</b>${a.url && !/acessorias\.com/i.test(a.url) ? ` (para outro site: <code>login_na_tv.bat ${esc(a.url.split('#')[0])}</code>)` : ''}.</li>
+    <li>Ele fecha a TV e abre o Chrome da TV no site. Faça o login, resolva o captcha e marque <b>manter conectado</b>.</li>
+    <li><b>Feche esse Chrome.</b> O Alava Vision abre de novo sozinho e este aviso some na próxima vez que o site entrar.</li></ol>
+    <p class="hint" style="margin-top:6px">O login precisa ser feito assim porque o captcha não passa com o player controlando o Chrome.</p></details>`,
+  waze: () => `<details><summary>O que fazer</summary><ol>
+    <li>Normalmente nada: a TV tenta o Waze de novo a cada 5 minutos e o aviso some sozinho quando ele voltar.</li>
+    <li>Se durar horas, abra <code>https://embed.waze.com/iframe?ct=livemap</code> no Chrome do computador da TV para ver
+      se o Waze está fora do ar ou pedindo verificação.</li></ol></details>`,
+};
+async function refreshAlerts() {
+  try {
+    const r = await api('GET', '/api/player/alerts'), bar = $('alerts-bar');
+    bar.hidden = !r.alerts.length;
+    bar.innerHTML = r.alerts.map(a => `<div class="alert-row">${a.kind === 'login'
+        ? `🔒 <b>${esc(a.item_name || 'Um site')}</b> abriu na <b>tela de login</b> na TV (desde ${esc(a.since_txt)}). A TV está pulando esse item até alguém fazer o login.`
+        : `🚗 <b>Trânsito (Waze)</b> não está carregando na TV desde ${esc(a.since_txt)} (${esc(a.detail)}). A TV está pulando o item.`}
+      ${(ALERT_HELP[a.kind] || (() => ''))(a, r.dir)}</div>`).join('');
+  } catch(e) {}
 }
 
 // ─── "No ar agora" ────────────────────────────────────────────────────────────
@@ -1477,7 +1522,7 @@ function openEdit(id) {
   $('f-name').value = item.name;
   $('f-duration').value = item.duration;
   const c = item.config || {};
-  if (item.type === 'url') $('f-url').value = c.url || '';
+  if (item.type === 'url') { $('f-url').value = c.url || ''; $('f-url-login').checked = c.login_watch !== false; }
   if (item.type === 'image' && c.url) { $('img-preview').src = c.url; $('img-preview').hidden = false; $('img-drop-text').hidden = true; }
   if (item.type === 'video') {
     if (c.url) { $('vid-preview').src = c.url; $('vid-preview').hidden = false; }
@@ -1616,6 +1661,7 @@ function setNewsForm(c, duration) {
   // Item salvo antes da 0.13.0 não tem cards_per_pass: deduz da duração salva (45 s ÷ 9 s = 5 cards), sem mudar o tempo na TV.
   $('f-news-cards').value = c.cards_per_pass || (duration ? Math.max(1, Math.round(duration / (c.per_headline || 9))) : 4);
   $('f-news-fx').checked = c.show_fx !== false;
+  $('f-news-ind').checked = c.show_ind !== false;
   $('f-news-max').value = c.max_items || 15;
   $('f-news-accent').value = c.accent || '#38bdf8';
   $('f-news-img').checked = c.show_images !== false;
@@ -1640,7 +1686,7 @@ function getNewsConfig() {
     accent: $('f-news-accent').value, show_images: $('f-news-img').checked, show_logo: $('f-news-logo').checked, block_words: $('f-news-block').value,
     prioritize: $('f-news-prio').checked, preferred_ratio: parseInt($('f-news-ratio').value) || 75,
     max_age_days: isNaN(age) ? 30 : age, boost_words: $('f-news-boost').value,
-    cards_per_pass: parseInt($('f-news-cards').value) || 4, show_fx: $('f-news-fx').checked,
+    cards_per_pass: parseInt($('f-news-cards').value) || 4, show_fx: $('f-news-fx').checked, show_ind: $('f-news-ind').checked,
   };
 }
 const feedLabel = u => NEWS_FEEDS.find(f => f.url === u)?.name || (() => { try { return new URL(u).hostname; } catch { return u; } })();
@@ -1882,7 +1928,7 @@ async function saveItem(dup) {   // dup = "Salvar e duplicar": salva e abre a c�
   if (currentType === 'url') {
     const url = normalizeUrl($('f-url').value);
     if (!url) { status('Informe a URL', 'err'); return; }
-    config = {url};
+    config = {url, login_watch: $('f-url-login').checked};
   } else if (currentType === 'image' || currentType === 'video' || currentType === 'html') {
     if (pendingFile) config = {url: pendingFile.url, ...(pendingFile.file ? {file: pendingFile.file} : {})};
     else if (editId) config = {...(itemById(editId)?.config || {})};
@@ -3052,6 +3098,7 @@ async function refreshAll() {
   if (!$('tab-schedule').hidden) await loadTimeline();
   if (!$('tab-calendar').hidden) await loadCalendar();
   refreshLive();
+  refreshAlerts();
 }
 
 async function boot() {
@@ -3061,7 +3108,7 @@ async function boot() {
 
 setupTrackDrop($('trk-playlist'));
 setupTrackDrop($('trk-item'));
-setInterval(() => { updateNowLine(); refreshLive(); }, 30000);
+setInterval(() => { updateNowLine(); refreshLive(); refreshAlerts(); }, 30000);
 
 if (authB64) boot(); else { boot(); showLogin(); }
 </script>

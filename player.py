@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.14.0
+Alava Vision — Player (player.py) · versão 0.15.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -68,6 +68,9 @@ MAPA DO CÓDIGO
                                       curiosity_due() → intercala /view/today (Configurações)
     Itens que podem ir para a tela .. playable()
     Mudança durante a exibição ...... after_change(), _item_key()  (não recomeça a playlist a cada salvamento)
+    Avisos: login e Waze (0.15.0) ... report_alert() → POST /api/player/alert; LOGIN_CHECK_JS (senha/captcha),
+                                      on_response() vigia live-map/api/georss; WAZE_WAIT, WAZE_RETRY, BLOCKED_HTML;
+                                      set_alert()/clear_alert() e as checagens dentro do laço de exibição do run()
     "Na TV agora" e Pular item ...... report_now() → POST /api/player/now; state["skip"] na signature()
                                       e em after_change() ("next") → encerra o item e vai ao próximo
     URL de cada tipo de item ........ item_url(), traffic_target() (trânsito → Waze direto)
@@ -90,7 +93,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -367,6 +370,80 @@ def report_now(server: str, item: dict, duration: int, source: str, nxt: str | N
     threading.Thread(target=send, name="agora", daemon=True).start()
 
 
+# ─── Avisos para o painel: site no login e Waze fora (0.15.0) ─────────────────
+#
+# Quando um item não pode ir ao ar, o player PULA o item e avisa o painel (POST /api/player/alert).
+# O painel mostra uma faixa de aviso com o que fazer. Quando o item volta a funcionar, o aviso some sozinho.
+#   • login — site (ex.: Acessórias) abriu na tela de login: campo de senha visível, ou captcha num
+#     endereço de login. Conferido 5 s depois de abrir e a cada 30 s. Desliga por item: config.login_watch.
+#   • waze  — o Waze não abriu, ou a chamada que traz o trânsito (live-map/api/georss) falhou ou não veio em
+#     WAZE_WAIT s. Depois de uma falha, só tenta de novo após WAZE_RETRY s (para não insistir no reCAPTCHA).
+# Se o item bloqueado for o ÚNICO da playlist, mostra BLOCKED_HTML no lugar (em vez de girar sem parar).
+WAZE_WAIT = 20
+WAZE_RETRY = 300
+LOGIN_FIRST_CHECK = 5
+LOGIN_EVERY = 30
+
+LOGIN_CHECK_JS = """() => {
+  const vis = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0'; };
+  const pw = [...document.querySelectorAll('input[type=password]')].some(vis);
+  const cap = [...document.querySelectorAll('iframe[src*="recaptcha/api2/anchor"], iframe[src*="recaptcha/enterprise/anchor"], ' +
+    'iframe[src*="hcaptcha"], iframe[src*="turnstile"], .g-recaptcha, .h-captcha, .cf-turnstile')].some(vis);
+  const path = (location.pathname + location.hash).toLowerCase();
+  const loginUrl = /(^|[\\/#?_-])(login|signin|sign-in|entrar|auth|acesso)([\\/?#._-]|$)/.test(path);
+  return {login: pw || (loginUrl && cap), captcha: cap, url: location.href};
+}"""
+
+BLOCKED_HTML = """<body style="margin:0;background:#0b1120;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;
+height:100vh;display:flex;align-items:center;justify-content:center;text-align:center">
+<div><div style="font-size:10vh">__ICON__</div><div style="font-size:5vh;font-weight:700;margin:2vh 0 1.5vh">__TITLE__</div>
+<div style="font-size:2.8vh;opacity:.7;max-width:70vw">__TEXT__</div></div></body>"""
+
+
+def waze_verdict(net: dict, nav_t: float, now: float) -> tuple[bool | None, str]:
+    """Depois de abrir o Waze em nav_t: (True, …) trânsito chegou; (False, motivo) falhou; (None, "") ainda esperando.
+    net = última resposta vista de live-map/api/georss: {"status": código HTTP, "at": quando}."""
+    if net.get("at", 0) >= nav_t:
+        return net.get("status") == 200, f"HTTP {net.get('status')}"
+    if now - nav_t >= WAZE_WAIT:
+        return False, f"sem resposta em {WAZE_WAIT} s"
+    return None, ""
+
+
+def blocked_html(icon: str, title: str, text: str) -> str:
+    import html as _h
+    return (BLOCKED_HTML.replace("__ICON__", icon).replace("__TITLE__", _h.escape(title))
+            .replace("__TEXT__", _h.escape(text)))
+
+
+def show_html(page, content: str) -> None:
+    """Mostra um HTML fixo (aviso, "nenhum item"). Passa antes por about:blank: o set_content sozinho reaproveita
+    a janela, e os timers da tela anterior (ex.: troca de manchetes) continuariam rodando por cima do aviso."""
+    try:
+        page.goto("about:blank")
+    except Exception:
+        pass
+    page.set_content(content)
+
+
+def report_alert(server: str, key: str, kind: str, active: bool, item: dict | None = None,
+                 url: str = "", detail: str = "") -> None:
+    """Avisa (ou limpa o aviso) no painel. Em thread à parte: se o servidor não responder, segue."""
+    body = json.dumps({"key": key, "kind": kind, "active": active, "item_id": (item or {}).get("id"),
+                       "item_name": (item or {}).get("name"), "url": url, "detail": detail}).encode()
+
+    def send():
+        try:
+            rq = urllib.request.Request(f"{server}/api/player/alert", data=body, method="POST",
+                                        headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(rq, timeout=3).close()
+        except Exception:
+            pass   # servidor antigo (sem a rota) ou reiniciando
+
+    threading.Thread(target=send, name="aviso", daemon=True).start()
+
+
 def item_url(item: dict, server: str) -> str:
     t = item["type"]
     if t == "url":
@@ -518,6 +595,31 @@ def run(args, push: PushChannel):
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.on("dialog", lambda d: d.dismiss())
+            # Waze: guarda a resposta da chamada que traz o trânsito (0.15.0, aviso "Waze fora")
+            waze_net = {"status": None, "at": 0.0}
+
+            def on_response(r):
+                if "/live-map/api/georss" in r.url:
+                    waze_net["status"], waze_net["at"] = r.status, time.time()
+            page.on("response", on_response)
+            alerts_on: set[str] = set()      # avisos que ESTE player levantou (para limpar na volta)
+            checked_ok: set[str] = set()     # já confirmou OK desde que abriu (limpa aviso antigo do servidor)
+            waze_fail_at = 0.0
+
+            def set_alert(key, kind, item, url, detail):
+                if key not in alerts_on:
+                    log(f"AVISO: {item.get('name')} — {detail}. Pulando o item até voltar a funcionar.")
+                alerts_on.add(key)
+                checked_ok.discard(key)
+                report_alert(server, key, kind, True, item, url, detail)
+
+            def clear_alert(key, kind):
+                if key in alerts_on or key not in checked_ok:
+                    report_alert(server, key, kind, False)
+                    if key in alerts_on:
+                        log(f"Aviso resolvido: {key}")
+                alerts_on.discard(key)
+                checked_ok.add(key)
 
             guard = MonitorGuard(args, browser_pid(browser, proc))
             guard.wait_window()
@@ -541,7 +643,7 @@ def run(args, push: PushChannel):
                 items = playable(state)
 
                 if not items:
-                    page.set_content(IDLE_HTML)
+                    show_html(page, IDLE_HTML)
                     current_url = None
                     idx = 0
                     for _ in range(5):
@@ -573,20 +675,43 @@ def run(args, push: PushChannel):
                 src = state.get("source") or {}
                 log(f"[{src.get('name', '?')}] {item['type']} · {item['name']} — {duration}s")
 
+                # Avisos (0.15.0): Waze fora / site pedindo login → pula o item e avisa o painel
+                is_waze = item["type"] == "traffic" and url.startswith("https://embed.waze.com")
+                watch_login = item["type"] == "url" and (item.get("config") or {}).get("login_watch", True)
+                login_key = f"login:{item.get('id')}"
+                alone = len(items) == 1 and not extra       # único item: mostra o aviso na tela em vez de girar
+                blocked = None
+                if is_waze and "waze" in alerts_on and time.time() - waze_fail_at < WAZE_RETRY:
+                    if not alone:
+                        time.sleep(.2)
+                        continue                            # Waze falhou há pouco: não insiste (reCAPTCHA)
+                    blocked = ("🚗", "Trânsito indisponível no momento",
+                               "O Waze não está entregando o trânsito. A TV tenta de novo em alguns minutos.")
+
                 # Um único item (ex.: sobreposição de clima) não é recarregado a cada ciclo.
                 # Exceção: vídeo sem repetição precisa recomeçar do início a cada volta.
                 once = plays_once(item)
-                if once or not (len(items) == 1 and url == current_url):
+                reloaded = False
+                if blocked:
+                    show_html(page, blocked_html(*blocked))
+                    current_url = None
+                elif once or not (len(items) == 1 and url == current_url):
                     try:
                         page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-                        current_url = url
+                        current_url, reloaded = url, True
                     except Exception as e:
                         if "closed" in str(e).lower():
                             raise
                         log("Falha ao navegar, pulando:", str(e).splitlines()[0])
                         current_url = None
+                        if is_waze:
+                            waze_fail_at = time.time()
+                            set_alert("waze", "waze", item, url, "o Waze não abriu (" + str(e).splitlines()[0][:90] + ")")
                         time.sleep(2)
                         continue
+                nav_t = time.time()
+                waze_pending = is_waze and reloaded         # espera a chamada do trânsito desta carga
+                next_login = nav_t + LOGIN_FIRST_CHECK if watch_login and not blocked else None
 
                 # Painel "Na TV agora": este item e o próximo da fila
                 nxt = items[idx % len(items)]["name"] if len(items) > 1 or extra else None
@@ -601,6 +726,38 @@ def run(args, push: PushChannel):
                 while time.time() < deadline:
                     push.wait(1)
                     guard.check()
+                    # Waze: a chamada do trânsito veio com sucesso? (ou passou WAZE_WAIT sem vir)
+                    verdict, why = waze_verdict(waze_net, nav_t, time.time()) if waze_pending else (None, "")
+                    if verdict is not None:
+                        waze_pending = False
+                        if verdict:
+                            clear_alert("waze", "waze")
+                        else:
+                            waze_fail_at = time.time()
+                            set_alert("waze", "waze", item, url, f"o Waze não entregou o trânsito ({why})")
+                            current_url = None
+                            if not alone:
+                                break
+                            show_html(page, blocked_html("🚗", "Trânsito indisponível no momento",
+                                                          "O Waze não está entregando o trânsito. A TV tenta de novo em alguns minutos."))
+                    # Site: abriu na tela de login? (5 s depois de abrir e a cada 30 s)
+                    if next_login and time.time() >= next_login:
+                        next_login = time.time() + LOGIN_EVERY
+                        try:
+                            res = page.evaluate(LOGIN_CHECK_JS)
+                        except Exception:
+                            res = None
+                        if res and res.get("login"):
+                            set_alert(login_key, "login", item, res.get("url") or url,
+                                      "abriu na tela de login" + (" com captcha" if res.get("captcha") else ""))
+                            current_url = None
+                            if not alone:
+                                break
+                            show_html(page, blocked_html("🔒", f"{item.get('name', 'O site')} pediu login",
+                                                          "Faça o login no computador da TV (o passo a passo está no aviso do painel)."))
+                            next_login, deadline = None, min(deadline, time.time() + 60)   # tenta de novo em 1 min
+                        elif res:
+                            clear_alert(login_key, "login")
                     if once:
                         try:
                             if page.evaluate(VIDEO_ENDED_JS):

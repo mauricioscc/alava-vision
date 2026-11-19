@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.14.0
+Alava Vision — Servidor (server.py) · versão 0.15.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -17,6 +17,7 @@ COMO RODAR
         http://localhost:8080/view/html/<id_do_item>       → página HTML local de um item
         http://localhost:8080/view/message-preview?c={"text":"Oi","bg_mode":"gradient"}  → prévia de mensagem
         http://localhost:8080/api/system/info?check=1 → versão instalada e se há atualização no GitHub (pede login)
+        http://localhost:8080/api/player/alerts → avisos da TV (site no login, Waze fora) — pede login
         http://localhost:8080/api/traffic       → como o player abre o trânsito (Waze direto + faixa da Alava)
         http://localhost:8080/view/today?per=30 → "Hoje é dia" com 30 s por card
         http://localhost:8080/api/fx            → cotação do dólar do rodapé das notícias (comercial, 30 dias, PTAX)
@@ -33,6 +34,9 @@ COMO RODAR
         Revezamento entre fontes ..... _round_robin_by_source() (cada fonte entrega uma matéria por rodada)
         Palavras que sobem a matéria . NEWS_BOOST_WORDS (config.boost_words por item) e NEWS_BOOST_HOURS
         Idade máxima da notícia ...... NEWS_MAX_AGE_DAYS (config.max_age_days; 0 = sem limite)
+        Indicadores (0.15.0) ......... _fx_fetch_ind(), _bcb_series(), BCB_SERIES (Selic, CDI, IPCA 12m, IGP-M, salário
+                                       mínimo; cache FX_TTL_IND 6 h); Euro em _fx_fetch_live(); página B do rodapé
+                                       (config.show_ind; alterna com o dólar a cada FX_PAGE_MS)
         Rodapé do dólar .............. get_fx() (FX_TTL_LIVE 2 min, FX_TTL_SLOW 30 min, FX_RETRY 1 min), _fx_fetch_live/
                                        _spark/_ptax (troque a fonte aqui), NEWS_FX_CSS/HTML/JS (visual; casas decimais: brl()),
                                        cache data/fx_cache.json; desliga por item com config.show_fx
@@ -50,6 +54,9 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.14.0 (antes dos avisos de login/Waze e dos indicadores no rodapé):
+        git checkout d484a6f -- server.py player.py static/index.html   (ou copie backup_v0.14.0_20261119/)
+        ferramentas/login_na_tv.bat é novo e pode ficar (nada depende dele).
     Para a 0.13.0 (antes do botão Atualizar, do trânsito no player e do tempo por card no "Hoje é dia"):
         git checkout 66da439 -- server.py player.py static/index.html atualizar.bat
         ou copie backup_v0.13.0_20261119/ (inclui o banco) por cima dos atuais.
@@ -95,6 +102,8 @@ MAPA DO CÓDIGO
                                       (repete todo ano seguindo feriado/data móvel), notice_occurrence(),
                                       notices_now() → intercalados no fim da playlist em resolve_now();
                                       GET /api/notices; contador anual em view_countdown()
+    Avisos da TV (0.15.0) ........... POST /api/player/alert (o player avisa, só localhost), GET /api/player/alerts,
+                                      _player_alerts, ALERT_KINDS (login, waze); faixa no painel: #alerts-bar
     Na TV agora / pular item ........ POST /api/player/now (o player informa, só localhost), GET /api/player/now,
                                       POST /api/player/skip (_skip_seq → state["skip"] → WebSocket)
     O que está no ar agora .......... resolve_now() (escolhe a régua do dia), _pick_block(), current_state(),
@@ -171,7 +180,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 load_dotenv()
 
@@ -958,6 +967,47 @@ def player_now():
             "stale": elapsed > dur + 90, "players": len(_players)}
 
 
+# ─── Avisos do player para o painel (0.15.0) ─────────────────────────────────
+#
+# O player conta ao servidor quando um item não pode ir ao ar e ele está PULANDO esse item:
+#   kind "login" → um site (ex.: Acessórias) abriu na tela de login/captcha (sessão expirou);
+#   kind "waze"  → o Waze não abriu ou não entregou os dados de trânsito.
+# O painel mostra uma faixa de aviso em todas as abas (GET /api/player/alerts, a cada 30 s) com o
+# que fazer. O player limpa o aviso sozinho quando o item volta a funcionar (active=false).
+# Fica só na memória: se o servidor reiniciar, o player avisa de novo na próxima tentativa.
+_player_alerts: dict[str, dict] = {}
+ALERT_KINDS = {"login", "waze"}
+
+
+@app.post("/api/player/alert")
+async def player_alert_report(request: Request):
+    if not request.client or request.client.host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(403, "Só o player deste computador envia avisos")
+    b = await request.json()
+    key, kind = str(b.get("key") or "")[:120], b.get("kind")
+    if not key or kind not in ALERT_KINDS:
+        raise HTTPException(400, "Aviso inválido")
+    if not b.get("active"):
+        if _player_alerts.pop(key, None):
+            print(f"[aviso] resolvido: {key}")
+        return {"ok": True}
+    now = time.time()
+    old = _player_alerts.get(key)
+    _player_alerts[key] = {"key": key, "kind": kind, "item_id": b.get("item_id"), "item_name": str(b.get("item_name") or "")[:120],
+                           "url": str(b.get("url") or "")[:300], "detail": str(b.get("detail") or "")[:300],
+                           "since": old["since"] if old else now, "last": now}
+    if not old:
+        print(f"[aviso] {kind}: {_player_alerts[key]['item_name']} — {_player_alerts[key]['detail']}")
+    return {"ok": True}
+
+
+@app.get("/api/player/alerts", dependencies=[Depends(require_auth)])
+def player_alerts():
+    fmt = lambda t: datetime.fromtimestamp(t).strftime("%d/%m %H:%M")
+    return {"dir": str(BASE), "alerts": [dict(a, since_txt=fmt(a["since"]), last_txt=fmt(a["last"]))
+                                         for a in sorted(_player_alerts.values(), key=lambda a: a["since"])]}
+
+
 @app.post("/api/player/skip", dependencies=[Depends(require_auth)])
 def player_skip():
     global _skip_seq
@@ -1416,7 +1466,7 @@ def _save_news_cache() -> None:
     try:
         with _news_cache_lock:
             snapshot = {u: [w, it] for u, (w, it) in _news_cache.items()}
-            tmp = NEWS_CACHE_FILE.with_suffix(".tmp")
+            tmp = NEWS_CACHE_FILE.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")   # nome único: 2 servidores na mesma pasta não se atropelam
             tmp.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
             tmp.replace(NEWS_CACHE_FILE)          # troca atômica: nunca fica pela metade
     except OSError as e:
@@ -1663,9 +1713,62 @@ def _fx_json(url: str):
 
 
 def _fx_fetch_live() -> dict:
-    q = _fx_json("https://economia.awesomeapi.com.br/json/last/USD-BRL")["USDBRL"]
-    return {"bid": float(q["bid"]), "pct": float(q["pctChange"]), "high": float(q["high"]),
-            "low": float(q["low"]), "ts": int(q["timestamp"])}
+    # Dólar e Euro na MESMA chamada (0.15.0: o Euro entra na página de indicadores do rodapé)
+    d = _fx_json("https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL")
+    q, e = d["USDBRL"], d.get("EURBRL")
+    out = {"bid": float(q["bid"]), "pct": float(q["pctChange"]), "high": float(q["high"]),
+           "low": float(q["low"]), "ts": int(q["timestamp"])}
+    if e:
+        out["eur"] = {"bid": float(e["bid"]), "pct": float(e["pctChange"])}
+    return out
+
+
+# ─── Indicadores econômicos do Banco Central (0.15.0) ─────────────────────────
+# Séries do SGS (api.bcb.gov.br, grátis, sem chave). Cada uma: (código, como ler).
+#   Selic meta (432, % a.a.) · CDI (4389, % a.a.) · IPCA 12 meses (13522, %) ·
+#   IGP-M 12 meses (189 = variação MENSAL; acumulamos os últimos 12 meses) · Salário mínimo (1619, R$)
+# Pegadinhas vistas em 19/11/2026:
+#   • "…/ultimos/N" às vezes responde HTTP 304 com corpo vazio (cache do CDN deles). A consulta por
+#     PERÍODO (dataInicial/dataFinal) respondeu 200 em todos os testes — por isso é a usada.
+#   • A Selic meta e o salário mínimo vêm com datas FUTURAS (até a próxima reunião do Copom / o valor já
+#     aprovado para o ano seguinte). Terminar o período em HOJE pega o valor vigente.
+# Muda no máximo 1×/dia: cache de FX_TTL_IND (6 h) em data/fx_cache.json, junto com a cotação.
+FX_TTL_IND = 6 * 3600
+BCB_SERIES = {"selic": 432, "cdi": 4389, "ipca12": 13522, "igpm": 189, "salmin": 1619}
+
+
+def _bcb_series(code: int, days: int) -> list:
+    hoje = _date.today()
+    q = urllib.parse.urlencode({"formato": "json", "dataInicial": (hoje - _timedelta(days=days)).strftime("%d/%m/%Y"),
+                                "dataFinal": hoje.strftime("%d/%m/%Y")})
+    rows = _fx_json(f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{code}/dados?{q}")
+    return [(r["data"], float(r["valor"])) for r in rows if r.get("valor") not in (None, "")]
+
+
+def _fx_fetch_ind() -> dict:
+    out, errors = {}, []
+    plan = {"selic": 20, "cdi": 20, "ipca12": 120, "igpm": 430, "salmin": 400}   # dias para trás em cada consulta
+    for key, days in plan.items():
+        try:
+            rows = _bcb_series(BCB_SERIES[key], days)
+            if not rows:
+                continue
+            if key == "igpm":                              # acumula os últimos 12 meses (juros compostos)
+                last12 = rows[-12:]
+                acc = 1.0
+                for _, v in last12:
+                    acc *= 1 + v / 100
+                out[key] = {"v": round((acc - 1) * 100, 2), "date": last12[-1][0], "months": len(last12)}
+            else:
+                out[key] = {"v": rows[-1][1], "date": rows[-1][0]}
+        except Exception as e:
+            errors.append(f"{key}: {e}")
+        time.sleep(.4)                                     # educado com a API (várias seguidas davam erro)
+    if not out:
+        raise RuntimeError("; ".join(errors) or "sem dados")
+    if errors:
+        print(f"[indicadores] parcial: {'; '.join(errors)}")
+    return out
 
 
 def _fx_fetch_spark() -> list:
@@ -1715,7 +1818,7 @@ def _fx_part(name: str, fetch, ttl: int, force: bool = False):
     with _fx_lock:
         _fx[name] = {"at": now, "fail": 0, "data": data}
         try:
-            tmp = FX_CACHE_FILE.with_suffix(".tmp")
+            tmp = FX_CACHE_FILE.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.write_text(json.dumps(_fx, ensure_ascii=False), encoding="utf-8")
             tmp.replace(FX_CACHE_FILE)
         except OSError:
@@ -1726,11 +1829,12 @@ def _fx_part(name: str, fetch, ttl: int, force: bool = False):
 def get_fx(force: bool = False) -> dict:
     """Tudo que o rodapé precisa. Campos ausentes = sem dado ainda (a tela esconde aquele pedaço)."""
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=3) as ex:      # as três em paralelo: no pior caso espera FX_TIMEOUT, não 3×
+    with ThreadPoolExecutor(max_workers=4) as ex:      # em paralelo: no pior caso espera FX_TIMEOUT, não 4×
         f_live = ex.submit(_fx_part, "live", _fx_fetch_live, FX_TTL_LIVE, force)
         f_spark = ex.submit(_fx_part, "spark", _fx_fetch_spark, FX_TTL_SLOW, force)
         f_ptax = ex.submit(_fx_part, "ptax", _fx_fetch_ptax, FX_TTL_SLOW, force)
-    live, spark, ptax = f_live.result(), list(f_spark.result() or []), f_ptax.result()
+        f_ind = ex.submit(_fx_part, "ind", _fx_fetch_ind, FX_TTL_IND, force)
+    live, spark, ptax, ind = f_live.result(), list(f_spark.result() or []), f_ptax.result(), f_ind.result()
     out = {"ok": bool(live)}
     if live:
         day = datetime.fromtimestamp(live["ts"]).strftime("%Y-%m-%d")
@@ -1743,6 +1847,8 @@ def get_fx(force: bool = False) -> dict:
     out["spark"] = spark[-30:]
     if ptax:
         out["ptax"] = ptax
+    if ind:
+        out["ind"] = ind                                   # Selic, CDI, IPCA 12m, IGP-M 12m, salário mínimo
     return out
 
 
@@ -2847,28 +2953,35 @@ show(); if (I.cards.length > 1) setInterval(show, {per_ms});
 </script>""")
 
 
-# Rodapé da cotação na tela de notícias (0.13.0). Fica ABAIXO da barra de tempo dos cards.
+# Rodapé da cotação na tela de notícias (0.13.0; indicadores do Banco Central na 0.15.0). Fica ABAIXO da barra
+# de tempo dos cards. config.show_fx = página do dólar; config.show_ind = página de indicadores (as duas se alternam).
 # Strings comuns (não f-string) para não precisar dobrar as chaves; view_news() injeta as duas.
 # Cores: ▲ verde = dólar subiu no dia, ▼ vermelho = caiu (convenção de painel de cotação).
 NEWS_FX_CSS = """
 body.fx .card{bottom:21vh}
 body.fx .bottom{bottom:12.6vh}
 body.fx .summary{-webkit-line-clamp:3}
-.fx{position:fixed;left:0;right:0;bottom:0;height:9.6vh;display:flex;align-items:center;gap:2.4vw;padding:0 4vw;
+.fx{position:fixed;left:0;right:0;bottom:0;height:9.6vh;
   background:linear-gradient(180deg,rgba(15,23,42,.55),rgba(15,23,42,.96));border-top:.2vh solid rgba(148,163,184,.18);
   font-variant-numeric:tabular-nums;color:#cbd5e1}
-.fx[hidden],.fx .grp[hidden]{display:none}
+/* 0.15.0: duas "páginas" no mesmo rodapé (dólar e indicadores), que se alternam com um esmaecer */
+.fxp{position:absolute;inset:0;display:flex;align-items:center;gap:2.4vw;padding:0 4vw;transition:opacity .9s ease}
+.fxp.off{opacity:0}
+.fx[hidden],.fx .grp[hidden],.fxp[hidden]{display:none}
 .fx .grp{display:flex;flex-direction:column;justify-content:center;gap:.5vh;white-space:nowrap}
 .fx .lbl{font-size:1.55vh;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#94a3b8}
 .fx .big{font-size:3.7vh;font-weight:700;color:#f8fafc;line-height:1}
 .fx .chg{font-size:2.7vh;font-weight:700;line-height:1}
 .fx .up{color:#4ade80}.fx .down{color:#f87171}.fx .flat{color:#94a3b8}
 .fx .mid{font-size:2.3vh;font-weight:600;color:#e2e8f0;line-height:1}
+.fx .ind{font-size:3vh;font-weight:700;color:#f8fafc;line-height:1}
+.fx .ind small{font-size:1.7vh;font-weight:600;color:#94a3b8;margin-left:.4vw}
 .fx svg{display:block;width:15vw;height:3.9vh;overflow:visible}
 .fx .vsep{width:1px;align-self:stretch;margin:2.2vh 0;background:rgba(148,163,184,.25)}
 .fx .when{margin-left:auto;text-align:right;font-size:1.7vh;line-height:1.5;color:#94a3b8}
 """
 NEWS_FX_HTML = """<div class="fx" id="fx" hidden>
+ <div class="fxp" id="fx-pa">
   <div class="grp"><span class="lbl">Dólar comercial</span><span class="big" id="fx-bid"></span></div>
   <div class="grp"><span class="lbl" id="fx-chg-lbl">Hoje</span><span class="chg" id="fx-chg"></span></div>
   <div class="grp" id="fx-spark-g"><span class="lbl">Últimos 30 dias</span><svg id="fx-spark"></svg></div>
@@ -2876,12 +2989,30 @@ NEWS_FX_HTML = """<div class="fx" id="fx" hidden>
   <div class="vsep"></div>
   <div class="grp" id="fx-ptax-g"><span class="lbl" id="fx-ptax-lbl">PTAX venda · Banco Central</span><span class="mid" id="fx-ptax"></span></div>
   <div class="when"><span id="fx-at"></span><br>AwesomeAPI · Banco Central</div>
+ </div>
+ <div class="fxp off" id="fx-pb">
+  <div class="grp" id="ind-eur-g"><span class="lbl">Euro</span><span class="ind" id="ind-eur"></span></div>
+  <div class="vsep"></div>
+  <div class="grp" id="ind-selic-g"><span class="lbl">Selic</span><span class="ind" id="ind-selic"></span></div>
+  <div class="grp" id="ind-cdi-g"><span class="lbl">CDI</span><span class="ind" id="ind-cdi"></span></div>
+  <div class="grp" id="ind-ipca12-g"><span class="lbl" id="ind-ipca12-l">IPCA 12 meses</span><span class="ind" id="ind-ipca12"></span></div>
+  <div class="grp" id="ind-igpm-g"><span class="lbl" id="ind-igpm-l">IGP-M 12 meses</span><span class="ind" id="ind-igpm"></span></div>
+  <div class="grp" id="ind-salmin-g"><span class="lbl">Salário mínimo</span><span class="ind" id="ind-salmin"></span></div>
+  <div class="when">Indicadores econômicos<br>Banco Central · AwesomeAPI</div>
+ </div>
 </div>"""
 NEWS_FX_JS = """
-// ─── Rodapé da cotação (0.13.0): desenha FX (vem embutido e é renovado de /api/fx a cada 1 min) ───
-// 2 casas decimais (R$ 5,91) em todos os valores do rodapé — pedido de 19/11/2026; para voltar a 4, troque d = 2 por d = 4
+// ─── Rodapé (0.13.0 dólar · 0.15.0 indicadores): desenha FX (embutido e renovado de /api/fx a cada 1 min) ───
+// Página A = dólar (comercial, variação, 30 dias, mín/máx, PTAX). Página B = Euro, Selic, CDI, IPCA 12m,
+// IGP-M 12m e salário mínimo. Com as duas ligadas, alternam a cada FX_PAGE_MS. Cada uma liga/desliga no item.
+// 2 casas decimais (R$ 5,91) em todos os valores — pedido de 19/11/2026; para voltar a 4, troque d = 2 por d = 4
+const FX_PAGE_MS = 15000;
 const brl = (v, d = 2) => 'R$ ' + v.toLocaleString('pt-BR', {minimumFractionDigits: d, maximumFractionDigits: d});
+const pct = v => v.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '%';
 const ddmm = s => s.slice(8, 10) + '/' + s.slice(5, 7);
+const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const mesAno = br => MES[+br.slice(3, 5) - 1] + '/' + br.slice(8, 10);     // "01/10/2026" → "out/26"
+const arrow = p => { const c = Math.abs(p) < 0.005 ? 'flat' : p > 0 ? 'up' : 'down'; return [c, {flat: '■ ', up: '▲ ', down: '▼ '}[c]]; };
 function drawSpark(svg, pts, dotColor) {
   const W = svg.clientWidth || 280, H = svg.clientHeight || 56, pad = 6;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -2898,25 +3029,51 @@ function drawSpark(svg, pts, dotColor) {
     <circle cx="${last[0]}" cy="${last[1]}" r="5" fill="${dotColor}"/>`;
   return true;
 }
+// Quais páginas têm o que mostrar agora (ligadas no item E com dado)
+const fxPages = () => [SHOW_FX && FX && FX.ok && 'fx-pa', SHOW_IND && FX && (FX.ind || FX.eur) && 'fx-pb'].filter(Boolean);
+let fxPage = 0;
+function showFxPage() {
+  const ps = fxPages(), on = ps[fxPage % Math.max(1, ps.length)];
+  ['fx-pa', 'fx-pb'].forEach(id => { $(id).hidden = !ps.includes(id); $(id).classList.toggle('off', id !== on); });
+}
 function drawFx() {
-  const ok = SHOW_FX && FX && FX.ok;
-  $('fx').hidden = !ok; document.body.classList.toggle('fx', !!ok);
-  if (!ok) return;
-  const p = FX.pct, cls = Math.abs(p) < 0.005 ? 'flat' : p > 0 ? 'up' : 'down';
-  $('fx-bid').textContent = brl(FX.bid);
-  $('fx-chg').className = 'chg ' + cls;
-  $('fx-chg').textContent = {flat: '■ ', up: '▲ ', down: '▼ '}[cls] +
-    Math.abs(p).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '%';
-  // fim de semana/feriado: a API devolve o último pregão — a etiqueta deixa isso claro
-  $('fx-chg-lbl').textContent = FX.today ? 'Variação hoje' : 'Pregão de ' + ddmm(FX.day);
-  $('fx-range').textContent = brl(FX.low) + '  ·  ' + brl(FX.high);
-  $('fx-spark-g').hidden = !drawSpark($('fx-spark'), FX.spark, {up: '#4ade80', down: '#f87171', flat: '#94a3b8'}[cls]);
-  $('fx-ptax-g').hidden = !FX.ptax;
-  if (FX.ptax) { $('fx-ptax-lbl').textContent = 'PTAX venda · BCB · ' + ddmm(FX.ptax.date); $('fx-ptax').textContent = brl(FX.ptax.sell); }
-  $('fx-at').textContent = 'Cotação das ' + FX.at;
+  const ps = fxPages();
+  $('fx').hidden = !ps.length; document.body.classList.toggle('fx', !!ps.length);
+  if (!ps.length) return;
+  if (ps.includes('fx-pa')) {
+    const [cls, ar] = arrow(FX.pct);
+    $('fx-bid').textContent = brl(FX.bid);
+    $('fx-chg').className = 'chg ' + cls;
+    $('fx-chg').textContent = ar + pct(Math.abs(FX.pct));
+    // fim de semana/feriado: a API devolve o último pregão — a etiqueta deixa isso claro
+    $('fx-chg-lbl').textContent = FX.today ? 'Variação hoje' : 'Pregão de ' + ddmm(FX.day);
+    $('fx-range').textContent = brl(FX.low) + '  ·  ' + brl(FX.high);
+    $('fx-spark-g').hidden = !drawSpark($('fx-spark'), FX.spark, {up: '#4ade80', down: '#f87171', flat: '#94a3b8'}[cls]);
+    $('fx-ptax-g').hidden = !FX.ptax;
+    if (FX.ptax) { $('fx-ptax-lbl').textContent = 'PTAX venda · BCB · ' + ddmm(FX.ptax.date); $('fx-ptax').textContent = brl(FX.ptax.sell); }
+    $('fx-at').textContent = 'Cotação das ' + FX.at;
+  }
+  if (ps.includes('fx-pb')) {
+    const I = FX.ind || {}, set = (k, html, lbl) => {
+      $(`ind-${k}-g`).hidden = !html;
+      if (html) $(`ind-${k}`).innerHTML = html;
+      if (lbl && $(`ind-${k}-l`)) $(`ind-${k}-l`).textContent = lbl;
+    };
+    if (FX.eur) { const [c, ar] = arrow(FX.eur.pct); set('eur', `${brl(FX.eur.bid)}<small class="${c}">${ar}${pct(Math.abs(FX.eur.pct))}</small>`); }
+    else set('eur', '');
+    set('selic', I.selic && `${pct(I.selic.v)}<small>a.a.</small>`);
+    set('cdi', I.cdi && `${pct(I.cdi.v)}<small>a.a.</small>`);
+    set('ipca12', I.ipca12 && pct(I.ipca12.v), I.ipca12 && 'IPCA 12 meses · ' + mesAno(I.ipca12.date));
+    set('igpm', I.igpm && pct(I.igpm.v), I.igpm && 'IGP-M 12 meses · ' + mesAno(I.igpm.date));
+    set('salmin', I.salmin && brl(I.salmin.v));
+  }
+  showFxPage();
 }
 drawFx();
-if (SHOW_FX) setInterval(async () => { try { FX = await (await fetch('/api/fx')).json(); drawFx(); } catch (e) {} }, 60000);
+if (SHOW_FX || SHOW_IND) {
+  setInterval(async () => { try { FX = await (await fetch('/api/fx')).json(); drawFx(); } catch (e) {} }, 60000);
+  setInterval(() => { fxPage++; showFxPage(); }, FX_PAGE_MS);
+}
 """
 
 
@@ -2942,8 +3099,10 @@ def view_news(item_id: str):
     # Rodapé com a cotação do dólar (config.show_fx, ligado por padrão). Sem dado (sem internet e sem
     # cache), o rodapé some e o cartão volta a ocupar a tela toda.
     show_fx = bool(cfg.get("show_fx", True))
-    fx_data = json.dumps(get_fx(), ensure_ascii=False) if show_fx else "null"
+    show_ind = bool(cfg.get("show_ind", True))          # 0.15.0: página de indicadores (Euro, Selic, CDI, IPCA…)
+    fx_data = json.dumps(get_fx(), ensure_ascii=False) if (show_fx or show_ind) else "null"
     show_fx_js = "true" if show_fx else "false"
+    show_ind_js = "true" if show_ind else "false"
     return HTMLResponse(f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -2994,7 +3153,7 @@ html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5
 <script>
 let N = {data}, FX = {fx_data};
 const PER = {per} * 1000, SHOW_IMG = {show_img}, KEY = 'news-idx-{html.escape(item_id)}';
-const SHOW_FX = {show_fx_js}, ACC = '{accent}';
+const SHOW_FX = {show_fx_js}, SHOW_IND = {show_ind_js}, ACC = '{accent}';
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
 function tick() {{ const d = new Date(); $('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()); }}
