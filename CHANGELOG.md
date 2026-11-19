@@ -7,6 +7,19 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.16.0] — 2026-11-19
+#### Adicionado
+- **Foto da TV no painel.** Ao lado de *Na TV agora* aparece uma foto da tela da TV, tirada pelo player a cada 5 minutos, com "Última atualização em HH:MM". Clique para ampliar. A foto mostra exatamente o que está na TV (inclusive o Acessórias e o Waze, que não abrem em prévia). Fica só na memória do servidor e só aparece com a senha do painel.
+- **⏮ Voltar item:** ao lado do *Pular item*, volta a TV para o item anterior da programação.
+- **◀ Notícia anterior / Próxima notícia ▶:** aparecem quando a TV está nas notícias e trocam só a manchete, sem tirar o item do ar.
+- **↺ Zerar histórico** de notícias exibidas, no formulário do item de notícias (mostra quantas já passaram).
+#### Corrigido
+- **Notícias repetindo durante o dia.** Os itens *Notícias* da Manhã e da Tarde mostravam 15 cards por vez com 15 notícias na fila, ou seja, a lista inteira a cada volta da playlist (cerca de 15 vezes por dia). Agora a TV anota cada manchete que ficou na tela (`data/news_seen.json`) e o pacote seguinte vem só com as que ainda não passaram, mantendo a prioridade contábil. O registro vale para todos os itens de notícias e vence em 3 dias. Com as fontes de hoje há cerca de 200 notícias diferentes, mais do que a TV mostra num dia. Se acabarem, volta primeiro a exibida há mais tempo.
+#### Observação
+- O player precisa ser reiniciado para ganhar a foto, os botões novos e as notícias sem repetir (o *Atualizar agora* já faz isso).
+#### Como reverter
+- `git checkout d2733ea -- server.py player.py static/index.html` ou copie `backup_v0.16.0_20261119/`. O arquivo `data/news_seen.json` pode ser apagado.
+
 ### [0.15.0] — 2026-11-19
 #### Adicionado
 - **Indicadores econômicos no rodapé das notícias.** O rodapé ganhou uma segunda página, que alterna com a do dólar a cada 15 s: **Euro** (com a variação do dia), **Selic** e **CDI** (% ao ano), **IPCA 12 meses**, **IGP-M 12 meses** (com o mês de referência) e **salário mínimo**. Fontes: Banco Central (SGS) e AwesomeAPI, grátis e sem chave; cache de 6 h. Liga e desliga por item: *Mostrar indicadores no rodapé*.
