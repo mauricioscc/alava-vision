@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.17.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.17.1
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -628,7 +628,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('report')" id="nb-report"><span class="ic">▤</span> Relatório</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.17.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.17.1</div>
 </aside>
 
 <div class="main">
@@ -1059,7 +1059,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
       </div>
 
       <div id="cfg-news" hidden class="form-group" style="gap:12px">
-        <div class="form-group"><label for="f-news-title">Título da tela</label><input type="text" id="f-news-title" placeholder="Notícias"></div>
+        <div class="form-group"><label for="f-news-title">Título da tela</label><input type="text" id="f-news-title" placeholder="News"></div>
         <div class="form-group"><label>Fontes <span class="hint">(marque as que entram na tela; a prioridade decide quem aparece mais)</span></label>
           <div class="feed-rows" id="feed-list"></div>
           <p class="hint">Prioridade <b>Alta</b> = fonte preferencial (foco contábil): ocupa a maior parte da fila. g1 Últimas e g1 Rio trazem bastante notícia policial; para a TV do escritório, BBC, Economia e InfoMoney costumam funcionar melhor.</p></div>
@@ -1090,7 +1090,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
         </p>
         <div class="form-group"><label for="f-news-accent">Cor de destaque</label><input type="color" id="f-news-accent" value="#38bdf8" style="max-width:120px"></div>
         <label class="check-line"><input type="checkbox" id="f-news-fx" checked> Mostrar a cotação do dólar no rodapé (comercial ao vivo, gráfico de 30 dias e PTAX do Banco Central)</label>
-        <label class="check-line"><input type="checkbox" id="f-news-ind" checked> Mostrar indicadores no rodapé (Euro, Selic, CDI, IPCA e IGP-M 12 meses, salário mínimo) — alterna com o dólar a cada 15 s</label>
+        <label class="check-line"><input type="checkbox" id="f-news-ind" checked> Mostrar indicadores no rodapé (Euro, Selic, CDI, IPCA e IGP-M 12 meses) — alterna com o dólar a cada 15 s</label>
         <label class="check-line"><input type="checkbox" id="f-news-img" checked> Mostrar a foto da notícia</label>
         <label class="check-line"><input type="checkbox" id="f-news-logo" checked> Mostrar a logo da Alava no cabeçalho</label>
         <div class="form-group"><label for="f-news-block">Ocultar notícias com estas palavras <span class="hint">(separadas por vírgula)</span></label>

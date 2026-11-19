@@ -7,6 +7,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
 ## Sistema Unificado
 
+### [0.17.1] — 2026-11-19
+#### Alterado
+- Rodapé das notícias: o **salário mínimo** saiu da página de indicadores (ficam Euro, Selic, CDI, IPCA 12 meses e IGP-M 12 meses).
+- Título padrão da tela de notícias: **"Alava News"** (era "Alava Notícias"). Itens com um título próprio no campo *Título da tela* continuam com ele.
+#### Como reverter
+- `git checkout b87dbf3 -- server.py static/index.html` ou copie `backup_v0.17.1_20261119/`.
+
 ### [0.17.0] — 2026-11-19
 #### Adicionado
 - **🧾 Agenda fiscal** (novo tipo de item): os vencimentos dos próximos dias, agrupados por data, com *HOJE / AMANHÃ / EM N DIAS* e a nota quando o prazo foi antecipado ou prorrogado por feriado ou fim de semana. São 18 obrigações prontas (eSocial, EFD-Reinf, salários no 5º dia útil, FGTS Digital, INSS, IRRF, DAS/PGDAS-D, DAS-MEI, PIS/Cofins, DCTFWeb, IRPJ/CSLL, 13º salário, DEFIS, IRPF, DASN-SIMEI, ECD, ECF), que podem ser ligadas e desligadas, além dos prazos do próprio escritório (`Nome | dia | antecipa/prorroga`). Prazos conferidos em 19/11/2026; a DCTFWeb já segue a IN RFB 2.248/2025 (último dia útil do mês seguinte).
