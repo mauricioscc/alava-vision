@@ -1,7 +1,7 @@
 # Alava Vision — TV corporativa / Digital Signage
 
 Painel web para montar o que passa na TV e um player que exibe esse conteúdo em tela cheia no segundo monitor.
-Versão atual: **0.11.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
+Versão atual: **0.12.0** (histórico em [CHANGELOG.md](CHANGELOG.md)).
 
 ## Como rodar
 
@@ -90,6 +90,11 @@ pode ser desligado no item). Sites, imagens, vídeos e mensagens aparecem sem al
 - **Contador regressivo:** título, data e hora do evento, cores e texto exibido quando a hora chega. Com *Tirar da TV depois que a hora chegar*, o item deixa de aparecer sozinho.
 - **HTML local:** envie um `.html` (página única) ou um `.zip` com a página e seus arquivos (CSS, imagens, scripts). A página inicial do `.zip` é o `index.html`. Cada envio fica em `data/html/<id>/`.
 
+### Tema do painel
+
+O botão no topo do painel alterna entre **Automático** (segue o tema do Windows), **Claro** e **Escuro**.
+A escolha fica salva no navegador. As telas da TV não mudam.
+
 ### Como a TV decide o que exibir
 
 Primeiro, a **régua do dia**:
@@ -110,6 +115,9 @@ Depois, **dentro da régua**:
 
 Dois blocos na mesma trilha no mesmo horário: vale o que começa mais tarde (o mais curto, se começarem juntos).
 Para conferir a decisão atual: `http://localhost:8080/api/player/state`.
+
+No topo da aba Programação, **Na TV agora** mostra o item na tela, quanto falta e o próximo. O botão
+**⏭ Pular item** passa a TV para o próximo item na hora.
 
 Salvar algo no painel não faz a TV recomeçar a playlist. O item na tela continua, e só aparece de novo se foi
 ele o editado. A playlist só recomeça do 1º item quando a programação troca de bloco.

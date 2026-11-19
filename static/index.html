@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.11.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.12.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,12 +9,15 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.11.0 (antes do botão de tema): git checkout 6efc5ba -- static/index.html
     Para a 0.10.0 (antes do calendário): git checkout 8c60d7f -- static/index.html server.py
     Para a 0.8.1 (antes dos widgets de HTML e contador): git checkout 3ac5a57 -- static/index.html
     Para a 0.2.0 (antes do Git): copie backup_v0.2.0_20261117/static/index.html por cima deste arquivo.
 
   MAPA DO CÓDIGO
-    Tokens de cor/tema ............. :root (CSS)
+    Tokens de cor/tema ............. :root (CSS); claro em @media prefers-color-scheme e :root[data-theme="light"]
+    Botão claro/escuro (0.12.0) .... #theme-btn (topo), THEMES, applyTheme(), cycleTheme(); script no <head>
+                                     aplica av_theme antes de desenhar (sem piscar)
     Barra lateral e abas ........... .sidebar, .nav-btn, showTab()
     "No ar agora" (topo) ........... #live-pill, refreshLive()
     Login .......................... #login-overlay, doLogin(), api()
@@ -40,6 +43,8 @@
                                      → GET /api/image-search, POST /api/image-import (nome do item obrigatório)
     Pré-visualização ............... #pv-overlay, .pv-screen, .pv-media, openPreview(), fitFrame()
     Aba Programação (timeline) ..... #tab-schedule, objeto TL, loadTimeline(), renderTimeline()
+      na TV agora / pular item ..... #now-card (#nc-*), #btn-skip, NOW, refreshNow() → GET /api/player/now,
+                                     renderNow(), skipItem() → POST /api/player/skip
       biblioteca arrastável ........ renderLibrary(), .chip
       régua, trilhas, zoom ......... renderRuler(), .track, PXH, TL.pxh (zoom contínuo) e TL.zoom (passo da grade)
       zoom com o mouse ............. #zoom-seg (atalhos Dia todo…1 min), .zoom-ctl (#zoom-range, −/+), applyZoom(),
@@ -71,10 +76,18 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Alava Vision</title>
 <link rel="icon" type="image/png" href="/assets/logo%20alava%20minimalista.png">
+<script>
+  // Tema (0.12.0): aplicado antes de desenhar a página, para não piscar no tema errado.
+  // av_theme = 'light' | 'dark'; sem valor = automático (segue o tema do Windows).
+  try { const t = localStorage.getItem('av_theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <style>
+/* TEMA (0.12.0): escuro é o padrão. O claro vale quando o Windows está no modo claro (automático)
+   ou quando o botão do topo escolhe "Claro" (data-theme="light" no <html>). "Escuro" força o escuro. */
 :root {
+  color-scheme: dark;
   --bg:      #0d0f14;
   --surface: #161920;
   --card:    #1c2030;
@@ -93,11 +106,20 @@
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
+    color-scheme: light;
     --bg: #f0f2f8; --surface: #fff; --card: #f7f8fc; --border: #dde1ee;
     --muted: #8b93ad; --text: #111827; --soft: #5b6476;
     --grid: rgba(15,23,42,.05); --grid-strong: rgba(15,23,42,.12);
   }
 }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f0f2f8; --surface: #fff; --card: #f7f8fc; --border: #dde1ee;
+  --muted: #8b93ad; --text: #111827; --soft: #5b6476;
+  --grid: rgba(15,23,42,.05); --grid-strong: rgba(15,23,42,.12);
+}
+/* Botão de tema no topo */
+.theme-btn{min-width:122px;justify-content:center}
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none!important}
 body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
@@ -366,6 +388,18 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
   background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--text)}
 .warn.info{border-color:color-mix(in srgb,var(--warn) 55%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
 
+/* ── Na TV agora / Pular item (0.12.0) ────────────────────────────────────── */
+.now-card{display:flex;align-items:center;gap:14px;padding:12px 16px;margin-bottom:14px;border-radius:var(--radius);
+  border:1px solid var(--border);background:var(--card)}
+.now-card .live-dot{width:10px;height:10px}
+.nc-info{flex:1;min-width:0}
+.nc-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.nc-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.nc-sub{font-size:12.5px;color:var(--soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nc-bar{height:4px;border-radius:2px;background:var(--grid-strong);margin-top:8px;overflow:hidden}
+.nc-bar i{display:block;height:100%;width:0;background:var(--accent);transition:width 1s linear}
+@media(max-width:700px){.now-card{flex-wrap:wrap}.now-card .btn{width:100%;justify-content:center}}
+
 /* ── Réguas por dia da semana (0.11.0) ───────────────────────────────────── */
 .ruler-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px}
 .ruler-bar .seg button.own::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
@@ -487,13 +521,14 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('calendar')" id="nb-calendar"><span class="ic">▦</span> Calendário</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.11.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.12.0</div>
 </aside>
 
 <div class="main">
   <header class="topbar">
     <h1 id="page-title">Playlists</h1>
     <div class="top-actions">
+      <button class="btn btn-ghost btn-sm theme-btn" id="theme-btn" onclick="cycleTheme()"></button>
       <span class="live-pill" id="live-pill" title="O que a TV está exibindo agora"><span class="live-dot"></span><span>No ar:</span><b id="live-name">—</b><span id="live-until"></span></span>
       <button class="btn btn-primary" onclick="openAddModal()" id="add-btn">+ Adicionar item</button>
     </div>
@@ -516,6 +551,18 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 
   <!-- ═══ Aba Programação (timeline) ═══ -->
   <div class="content" id="tab-schedule" hidden>
+    <!-- Na TV agora + Pular item (0.12.0) -->
+    <div class="now-card" id="now-card">
+      <span class="live-dot"></span>
+      <div class="nc-info">
+        <div class="nc-label">Na TV agora</div>
+        <div class="nc-name" id="nc-name">—</div>
+        <div class="nc-sub" id="nc-sub"></div>
+        <div class="nc-bar"><i id="nc-bar"></i></div>
+      </div>
+      <button class="btn btn-primary" id="btn-skip" onclick="skipItem()" disabled>⏭ Pular item</button>
+    </div>
+
     <!-- Régua em edição: Todos os dias, um dia da semana ou a exceção de uma data (0.11.0) -->
     <div class="ruler-bar">
       <span class="hint" style="color:var(--soft)">Régua</span>
@@ -2656,6 +2703,73 @@ async function resetCuriosities() {
   catch(e) { status('Erro: ' + e.message, 'err'); }
 }
 
+// ═══ NA TV AGORA / PULAR ITEM (0.12.0) ════════════════════════════════════════
+// O player conta ao servidor o que pôs na tela (POST /api/player/now). Aqui a aba Programação
+// mostra o item, quanto falta, o próximo e o botão "⏭ Pular item" (POST /api/player/skip).
+// Atualiza o relógio a cada 1 s e pergunta ao servidor a cada 5 s, só com a aba aberta.
+const NOW = {data: null, at: 0, ticks: 0};
+const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+async function refreshNow() {
+  try { NOW.data = await api('GET', '/api/player/now'); NOW.at = Date.now(); } catch(e) {}
+  renderNow();
+}
+function renderNow() {
+  const d = NOW.data, btn = $('btn-skip');
+  if (!d || !d.playing) {
+    $('nc-name').textContent = '—';
+    $('nc-sub').textContent = 'O player ainda não informou o que está na tela. Ele está aberto?';
+    $('nc-bar').style.width = '0'; btn.disabled = true; return;
+  }
+  const left = Math.max(0, d.remaining - (Date.now() - NOW.at) / 1000);
+  $('nc-name').textContent = `${TYPE_ICONS[d.type] || '▶'} ${d.name || ''}`;
+  const parts = [d.source, `faltam ${mmss(left)}`, d.next ? `próximo: ${d.next}` : 'só este item no ar'];
+  $('nc-sub').textContent = parts.filter(Boolean).join(' · ');
+  if (d.stale) $('nc-sub').textContent = '⚠ O player não dá notícias há algum tempo. Confira se ele está aberto.';
+  $('nc-bar').style.width = (d.duration ? Math.min(100, (1 - left / d.duration) * 100) : 0) + '%';
+  btn.disabled = !!d.stale || btn.dataset.busy === '1';
+  btn.title = d.players ? 'Encerra o item atual na TV e passa para o próximo'
+    : 'O player está sem a conexão instantânea: o pulo pode levar até 5 s';
+}
+async function skipItem() {
+  const btn = $('btn-skip'); btn.dataset.busy = '1'; btn.disabled = true;
+  try {
+    await api('POST', '/api/player/skip');
+    status(NOW.data?.next ? `Pulando para: ${NOW.data.next}` : 'Pulando…');
+    setTimeout(refreshNow, 1200); setTimeout(refreshNow, 3000);
+  } catch(e) { status('Erro: ' + e.message, 'err'); }
+  setTimeout(() => { btn.dataset.busy = ''; renderNow(); }, 2500);
+}
+setInterval(() => {
+  if ($('tab-schedule').hidden) return;
+  NOW.ticks++;
+  const left = NOW.data?.playing ? NOW.data.remaining - (Date.now() - NOW.at) / 1000 : 1;
+  if (NOW.ticks % 5 === 0 || (left < -1 && NOW.ticks % 2 === 0)) refreshNow(); else renderNow();
+}, 1000);
+
+// ═══ TEMA CLARO / ESCURO (0.12.0) ═════════════════════════════════════════════
+// O botão do topo alterna Automático → Claro → Escuro. A escolha fica no navegador (av_theme),
+// e o script no <head> já aplica antes de a página aparecer. Só muda o painel: as telas da TV não mudam.
+const THEMES = [
+  {id: 'auto', icon: '🖥', label: 'Automático', tip: 'Segue o tema do Windows. Clique para usar o modo claro.'},
+  {id: 'light', icon: '☀', label: 'Claro', tip: 'Modo claro. Clique para usar o modo escuro.'},
+  {id: 'dark', icon: '🌙', label: 'Escuro', tip: 'Modo escuro. Clique para seguir o tema do Windows.'},
+];
+function currentTheme() { return store.get('av_theme') || 'auto'; }
+function applyTheme(id) {
+  if (id === 'auto') { delete document.documentElement.dataset.theme; store.del('av_theme'); }
+  else { document.documentElement.dataset.theme = id; store.set('av_theme', id); }
+  const t = THEMES.find(x => x.id === id);
+  $('theme-btn').textContent = `${t.icon} ${t.label}`;
+  $('theme-btn').title = t.tip;
+  $('theme-btn').setAttribute('aria-label', `Tema do painel: ${t.label}. ${t.tip}`);
+}
+function cycleTheme() {
+  const i = THEMES.findIndex(x => x.id === currentTheme());
+  applyTheme(THEMES[(i + 1) % THEMES.length].id);
+}
+applyTheme(currentTheme());
+
 // ═══ NAVEGAÇÃO E INICIALIZAÇÃO ════════════════════════════════════════════════
 const TITLES = {playlists: 'Playlists', schedule: 'Programação', calendar: 'Calendário', settings: 'Configurações'};
 function showTab(tab) {
@@ -2668,6 +2782,7 @@ function showTab(tab) {
   store.set('av_tab', tab);
   if (tab === 'settings') loadSettings().catch(() => {});
   if (tab === 'calendar') loadCalendar().catch(e => status('Erro ao carregar o calendário: ' + e.message, 'err'));
+  if (tab === 'schedule') refreshNow();
   if (tab === 'schedule') loadTimeline().catch(e => status('Erro ao carregar a programação: ' + e.message, 'err'));
 }
 

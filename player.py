@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.11.0
+Alava Vision — Player (player.py) · versão 0.12.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -57,6 +57,8 @@ MAPA DO CÓDIGO
                                       curiosity_due() → intercala /view/today (Configurações)
     Itens que podem ir para a tela .. playable()
     Mudança durante a exibição ...... after_change(), _item_key()  (não recomeça a playlist a cada salvamento)
+    "Na TV agora" e Pular item ...... report_now() → POST /api/player/now; state["skip"] na signature()
+                                      e em after_change() ("next") → encerra o item e vai ao próximo
     URL de cada tipo de item ........ item_url()
     Loop de exibição ................ run()
     Parâmetros de linha de comando .. main()
@@ -75,7 +77,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -110,8 +112,9 @@ def fetch_state(server: str) -> dict:
 
 
 def signature(state: dict) -> tuple:
-    """O que importa para saber se a TV precisa trocar de conteúdo."""
-    return state.get("version"), state.get("slot")
+    """O que importa para saber se a TV precisa trocar de conteúdo.
+    "skip" (0.12.0) muda quando alguém clica em "Pular item" no painel."""
+    return state.get("version"), state.get("slot"), state.get("skip")
 
 
 class PushChannel:
@@ -295,11 +298,14 @@ def after_change(item: dict, old: dict, new: dict) -> tuple[str, int | None]:
       "restart", 0     → outro bloco/régua entrou no ar: começa a playlist nova do início;
       "keep",  idx     → o item na tela não mudou: continua sem interromper; idx = próximo da fila;
       "reload", idx    → o item na tela foi editado: mostra de novo já com a mudança (idx = ele);
-      "skip",  idx     → foi removido/desativado: vai para o próximo que ainda existe.
+      "skip",  idx     → foi removido/desativado: vai para o próximo que ainda existe;
+      "next",  None    → clicaram em "Pular item" no painel: encerra este e vai para o próximo.
     idx None = manter o índice atual.
     """
     if new.get("slot") != old.get("slot"):
         return "restart", 0
+    if new.get("skip") != old.get("skip"):           # botão "Pular item" do painel (0.12.0)
+        return "next", None                          # idx já aponta para o próximo da fila
     if item.get("id") == "auto":                     # curiosidade intercalada: não está na lista
         return "keep", None
     new_items, old_items = playable(new), playable(old)
@@ -313,6 +319,23 @@ def after_change(item: dict, old: dict, new: dict) -> tuple[str, int | None]:
     after = old_ids[old_ids.index(item["id"]) + 1:] if item["id"] in old_ids else []
     nxt = next((new_ids.index(i) for i in after if i in new_ids), 0)
     return "skip", nxt
+
+
+def report_now(server: str, item: dict, duration: int, source: str, nxt: str | None, skip_seq) -> None:
+    """Conta ao servidor o que entrou na tela, para o painel mostrar "Na TV agora" (0.12.0).
+    Numa thread à parte e sem esperar: se o servidor não responder, a TV segue normalmente."""
+    body = json.dumps({"id": item.get("id"), "name": item.get("name"), "type": item.get("type"),
+                       "duration": duration, "source": source, "next": nxt, "skip_seq": skip_seq}).encode()
+
+    def send():
+        try:
+            rq = urllib.request.Request(f"{server}/api/player/now", data=body, method="POST",
+                                        headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(rq, timeout=3).close()
+        except Exception:
+            pass   # servidor antigo (sem a rota) ou reiniciando
+
+    threading.Thread(target=send, name="agora", daemon=True).start()
 
 
 def item_url(item: dict, server: str) -> str:
@@ -447,6 +470,10 @@ def run(args, push: PushChannel):
                         time.sleep(2)
                         continue
 
+                # Painel "Na TV agora": este item e o próximo da fila
+                nxt = items[idx % len(items)]["name"] if len(items) > 1 or extra else None
+                report_now(server, item, duration, src.get("name", ""), nxt, state.get("skip"))
+
                 # Durante a exibição, confere se algo mudou: versão (alguém salvou no painel)
                 # ou slot (a grade mudou de bloco). Com o WebSocket ligado, o aviso chega na
                 # hora; sem ele, pergunta ao servidor a cada 5 s.
@@ -481,7 +508,8 @@ def run(args, push: PushChannel):
                             continue                     # salvaram outra coisa: segue exibindo este item
                         log({"restart": "Programação mudou — trocando conteúdo",
                              "reload": "Item editado no painel — mostrando de novo",
-                             "skip": "Item removido/desativado — próximo"}[action])
+                             "skip": "Item removido/desativado — próximo",
+                             "next": "Pulado pelo painel — próximo item"}[action])
                         current_url = None
                         deadline = 0
         finally:
