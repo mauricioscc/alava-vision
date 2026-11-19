@@ -692,6 +692,7 @@ def run(args, push: PushChannel):
                 # Exceção: vídeo sem repetição precisa recomeçar do início a cada volta.
                 once = plays_once(item)
                 reloaded = False
+                nav_t = time.time()                         # ANTES de abrir: resposta rápida do Waze também conta
                 if blocked:
                     show_html(page, blocked_html(*blocked))
                     current_url = None
@@ -709,7 +710,6 @@ def run(args, push: PushChannel):
                             set_alert("waze", "waze", item, url, "o Waze não abriu (" + str(e).splitlines()[0][:90] + ")")
                         time.sleep(2)
                         continue
-                nav_t = time.time()
                 waze_pending = is_waze and reloaded         # espera a chamada do trânsito desta carga
                 next_login = nav_t + LOGIN_FIRST_CHECK if watch_login and not blocked else None
 
@@ -727,6 +727,15 @@ def run(args, push: PushChannel):
                     push.wait(1)
                     guard.check()
                     # Waze: a chamada do trânsito veio com sucesso? (ou passou WAZE_WAIT sem vir)
+                    if waze_pending:
+                        # O Playwright (modo síncrono) só ENTREGA os eventos de rede durante uma chamada ao navegador.
+                        # O laço só espera (push.wait), então sem esta chamada barata a resposta do trânsito ficava na
+                        # fila e o player achava que o Waze não tinha respondido — falso "Trânsito indisponível"
+                        # (visto em 19/11/2026, com o trânsito aparecendo na tela).
+                        try:
+                            page.evaluate("0")
+                        except Exception:
+                            pass
                     verdict, why = waze_verdict(waze_net, nav_t, time.time()) if waze_pending else (None, "")
                     if verdict is not None:
                         waze_pending = False
