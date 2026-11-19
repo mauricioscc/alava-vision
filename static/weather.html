@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Tela de clima (static/weather.html) · versão 0.6.3
+  Alava Vision — Tela de clima (static/weather.html) · versão 0.13.0
 
   COMO ABRIR / TESTAR (servidor rodando na porta 8080)
     http://localhost:8080/view/weather                         previsão real
@@ -14,6 +14,8 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/weather.html   (commits: git log --oneline)
+    Para antes da 0.13.0 (condição pelo modelo, sem METAR): copie backup_clima_20261119/weather.html por cima deste
+        arquivo e backup_clima_20261119/server.py por cima do server.py (ou git checkout main -- static/weather.html server.py).
     Para a 0.2.0: copie backup_v0.2.0_20261117/static/weather.html por cima deste arquivo.
 
   MAPA DO CÓDIGO
@@ -21,6 +23,9 @@
     Bloco "Chance de chuva" ..... .v / .v small  (CSS) e array `stats` em render()
     Relógio ..................... tick()
     Códigos de tempo (WMO) ...... DESC, INTENSITY, kindOf(), desc()
+    Condição atual (0.13.0) ..... W.current.code já vem OBSERVADA do servidor (METAR do aeroporto mais próximo,
+                                  _apply_observed() no server.py); W.current.code_model = o que o modelo dizia.
+                                  Origem mostrada no rodapé: #upd em render() ("tempo observado em … às HH:MM")
     Ícones SVG .................. icon(), sunI(), moonI(), cloudI()
     Dados / modo demonstração ... let W (previsão embutida pelo servidor), load(), fakeData(), applyDemo()
     INMET indisponível .......... W.inmet_status === 'unavailable' → card cinza no painel de alertas (NO_SIGNAL)
@@ -28,6 +33,9 @@
     Fonte ....................... @font-face com static/fonts/inter-latin.woff2 (sem Google Fonts)
     Preenchimento da tela ....... render()
     Céu animado (canvas) ........ Sky (PAL, TONES, CONF, build(), frame(), drawSun/Moon/Clouds/Rain/Snow/Fog/Lightning)
+    Chuva de dia x noite (0.13.0)  rainVariant() → 'sunrain' (dia, com sol, drawRainbow(), gotas douradas em dropColor()),
+                                  'rain' (dia, chuva forte) e 'nightrain' (noite: lua MOON_RAIN_VIS, drawCityGlow());
+                                  limite de intensidade RAIN_SUN_MAX; ícone com sol/lua atrás em icon()
     Dia / noite ................. isDay() pelo nascer/pôr do sol de hoje; conferido a cada 30 s (final do script)
     Crepúsculo (20 min) ......... TWILIGHT_MIN, twilight(), twilightColors() (DUSK), twilightSunPos()
     Simular horário ............. ?hora=HH:MM  → skyNow()  (ex.: /view/weather?hora=18:25)
@@ -218,7 +226,8 @@ function icon(code, day) {
   else if (k === 'partly') s = body(17, 17, .8) + cloudI('#F4F7FC', 4, 2, .92);
   else if (k === 'overcast') s = cloudI('#B9C3D1', -6, -6, .8) + cloudI('#E6EBF2', 2, 2);
   else if (k === 'fog') s = cloudI('#D5DBE4', 0, -8) + '<g stroke="#D5DBE4" stroke-width="2.6" stroke-linecap="round"><line x1="10" y1="37" x2="38" y2="37"/><line x1="14" y1="43" x2="34" y2="43"/></g>';
-  else if (k === 'rain') s = cloudI('#C9D2DE', 0, -7) + '<g stroke="#7CC4FF" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="35" x2="15" y2="43"/><line x1="26" y1="35" x2="23" y2="43"/><line x1="34" y1="35" x2="31" y2="43"/></g>';
+  else if (k === 'rain') s = ((INTENSITY[code] || 0) <= RAIN_SUN_MAX ? body(15, 13, .62) : '') +   // 0.13.0: sol/lua atrás
+    cloudI('#C9D2DE', 0, -7) + '<g stroke="#7CC4FF" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="35" x2="15" y2="43"/><line x1="26" y1="35" x2="23" y2="43"/><line x1="34" y1="35" x2="31" y2="43"/></g>';
   else if (k === 'snow') s = cloudI('#D9E0EA', 0, -7) + '<g fill="#fff"><circle cx="17" cy="38" r="2"/><circle cx="25" cy="42" r="2"/><circle cx="33" cy="38" r="2"/></g>';
   else s = cloudI('#8B96A6', 0, -7) + '<path d="M25 30l-6 9h5l-3 8 9-11h-5l3-6z" fill="#FFD23F"/>';
   return `<svg viewBox="0 0 48 48" aria-hidden="true">${s}</svg>`;
@@ -308,8 +317,11 @@ function render() {
   const c = W.current, today = W.daily[0] || {}, day = isDay();
   shownDay = day;
   $('city').textContent = W.city || '';
+  // 0.13.0: diz de onde vem a condição atual — observada no aeroporto (METAR) ou estimada pelo modelo.
+  const ob = c.obs;
   $('upd').textContent = 'Atualizado às ' + (W.updated_at
-    || new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'}));
+    || new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})) +
+    (ob ? ` · tempo observado em ${ob.name || ob.station} às ${ob.time}` : c.source === 'modelo' ? ' · tempo estimado pela previsão' : '');
   $('cur-icon').innerHTML = icon(c.code, day);
   $('temp').textContent = r0(c.temp) + '°';
   $('cond').textContent = desc(c.code, day);
@@ -368,6 +380,21 @@ function render() {
     W.sunrise, W.sunset);
 }
 
+// ─── Chuva de dia x chuva de noite (0.13.0) ──────────────────────────────────
+// A chuva tinha um céu só (cinza, sem sol nem lua) para dia e noite. Agora:
+//   'sunrain'   → DIA, chuva fraca/moderada/pancadas (intensidade ≤ RAIN_SUN_MAX): céu mais claro com
+//                 aberturas, sol aparecendo, gotas douradas perto dele e arco-íris do lado oposto ao sol.
+//   'rain'      → DIA, chuva forte (65, 82…): o céu fechado e escuro de sempre.
+//   'nightrain' → NOITE, qualquer chuva: azul-marinho, lua borrada atrás das nuvens (some na chuva forte),
+//                 gotas prateadas e o brilho laranja da cidade nas nuvens baixas.
+// Testar: /view/weather?demo=rain&day=1 (com sol) · ?demo=heavy&day=1 (forte) · ?demo=rain&day=0 (noite)
+const RAIN_SUN_MAX = .75;
+function rainVariant(scene) {
+  if (scene.kind !== 'rain') return scene.kind;
+  if (!scene.day) return 'nightrain';
+  return scene.intensity <= RAIN_SUN_MAX ? 'sunrain' : 'rain';
+}
+
 // ─── Céu animado ──────────────────────────────────────────────────────────────
 const Sky = (() => {
   const cv = $('sky'), ctx = cv.getContext('2d'), R = Math.random;
@@ -380,10 +407,12 @@ const Sky = (() => {
   const PAL = {
     day: {clear: ['#1462d4', '#4f9fee', '#a6d3ff'], partly: ['#2a6cc6', '#679fdf', '#b4d3ef'],
       overcast: ['#5b6676', '#8994a2', '#b3bbc5'], fog: ['#8c959e', '#afb6bd', '#d1d5d9'],
-      rain: ['#3b4552', '#5c6876', '#7f8a96'], storm: ['#14181f', '#283039', '#434d5c'], snow: ['#8b9aaf', '#b5c1d0', '#dae1e9']},
+      rain: ['#3b4552', '#5c6876', '#7f8a96'], storm: ['#14181f', '#283039', '#434d5c'], snow: ['#8b9aaf', '#b5c1d0', '#dae1e9'],
+      sunrain: ['#3f6597', '#7d9cc2', '#d2dbe3'], nightrain: ['#3b4552', '#5c6876', '#7f8a96']},
     night: {clear: ['#020713', '#0a1835', '#1c325c'], partly: ['#040916', '#0f1b35', '#21304c'],
       overcast: ['#0a0d13', '#161b24', '#252c37'], fog: ['#13171d', '#21262d', '#343a42'],
-      rain: ['#06080c', '#11151b', '#1f252d'], storm: ['#020305', '#0b0e13', '#191e26'], snow: ['#131925', '#222b3a', '#394455']},
+      rain: ['#06080c', '#11151b', '#1f252d'], storm: ['#020305', '#0b0e13', '#191e26'], snow: ['#131925', '#222b3a', '#394455'],
+      sunrain: ['#06080c', '#11151b', '#1f252d'], nightrain: ['#050913', '#0f1a2e', '#2a2c38']},
   };
   const TONES = {
     white: [[255, 255, 255], 'rgba(118,136,165,.5)'],
@@ -392,6 +421,8 @@ const Sky = (() => {
     storm: [[86, 93, 106], 'rgba(10,12,18,.85)'],
     night: [[88, 100, 124], 'rgba(8,10,20,.7)'],
     nightDark: [[50, 56, 68], 'rgba(4,5,10,.8)'],
+    sunlit: [[226, 230, 236], 'rgba(96,106,124,.6)'],      // nuvem de chuva com o sol batendo (0.13.0)
+    nightRain: [[62, 72, 94], 'rgba(6,8,16,.82)'],         // nuvem de chuva à noite, levemente azulada
   };
   const CONF = {
     clear: {n: 3, tone: 'white', a: .7, s: [.45, .8]},
@@ -401,9 +432,12 @@ const Sky = (() => {
     rain: {n: 22, tone: 'dark', a: .96, s: [1, 1.9]},
     storm: {n: 26, tone: 'storm', a: 1, s: [1.1, 2.1]},
     snow: {n: 16, tone: 'grey', a: .9, s: [.9, 1.6]},
+    sunrain: {n: 13, tone: 'sunlit', a: .9, s: [.9, 1.7]},     // menos nuvens: sobra abertura para o sol
+    nightrain: {n: 20, tone: 'nightRain', a: .92, s: [1, 1.9]},
   };
-  const SUN_VIS = {clear: 1, partly: .85, overcast: .12, fog: .35, rain: 0, storm: 0, snow: .1};
+  const SUN_VIS = {clear: 1, partly: .85, overcast: .12, fog: .35, rain: 0, storm: 0, snow: .1, sunrain: .72};
   const STAR_VIS = {clear: 1, partly: .6};
+  const MOON_RAIN_VIS = .7;    // lua atrás das nuvens na chuva noturna (0 na chuva forte)
 
   const hex = c => c[0] === '#' ? [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)) : c.match(/\d+/g).slice(0, 3).map(Number);
   const mix = (a, b, t) => { const A = hex(a), B = hex(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t))})`; };
@@ -431,7 +465,7 @@ const Sky = (() => {
 
   function build() {
     const k = S.kind, cf = {...CONF[k]}, sc = w / 1920;
-    if (!S.day) cf.tone = (k === 'clear' || k === 'partly') ? 'night' : 'nightDark';
+    if (!S.day && k !== 'nightrain') cf.tone = (k === 'clear' || k === 'partly') ? 'night' : 'nightDark';
     const imgs = spritesFor(cf.tone);
     clouds = Array.from({length: cf.n}, () => {
       const depth = .35 + R() * .65;
@@ -440,7 +474,7 @@ const Sky = (() => {
         x: -300 * sc + R() * (w + 500 * sc), y: h * (-.08 + R() * .5)};
     }).sort((a, b) => a.depth - b.depth);
 
-    const rainy = k === 'rain' || k === 'storm';
+    const rainy = k === 'rain' || k === 'storm' || k === 'sunrain' || k === 'nightrain';
     drops = rainy ? Array.from({length: Math.round((140 + 700 * S.intensity) * sc)}, () => ({
       x: R() * w, y: R() * h, z: .5 + R() * .5, len: 14 + R() * 18, v: 900 + R() * 600})) : [];
     flakes = k === 'snow' ? Array.from({length: Math.round((120 + 300 * S.intensity) * sc)}, () => ({
@@ -593,10 +627,56 @@ const Sky = (() => {
     }
   }
 
-  function drawRain(dt) {
+  // Arco-íris (chuva com sol): fica do lado OPOSTO ao sol, centrado abaixo do horizonte, como na natureza.
+  // Mais forte com o sol baixo (manhã e fim de tarde) e mais fraco ao meio-dia. Pulsa devagar.
+  function drawRainbow(sp, t) {
+    if (!sp) return;
+    const low = Math.min(1, Math.max(.25, (sp.y / h - .15) / .55));     // sol baixo → arco mais visível
+    const a = .32 * low * (.75 + .25 * Math.sin(t * .35));
+    const cx = w - sp.x, cy = h * 1.08, R0 = h * .78;
+    const BANDS = ['255,64,64', '255,150,40', '255,232,70', '80,210,90', '70,150,255', '110,80,220', '160,80,200'];
+    ctx.save(); ctx.globalCompositeOperation = 'screen'; ctx.lineWidth = h * .014;
+    BANDS.forEach((c, i) => {
+      ctx.strokeStyle = `rgba(${c},${a})`; ctx.beginPath();
+      ctx.arc(cx, cy, R0 - i * h * .013, Math.PI * 1.08, Math.PI * 1.92); ctx.stroke();
+    });
+    ctx.restore();
+  }
+  // Chuva à noite: luz laranja da cidade refletindo nas nuvens baixas (faixa quente no horizonte).
+  function drawCityGlow(t) {
+    const g = ctx.createLinearGradient(0, h * .55, 0, h);
+    const a = .2 + .03 * Math.sin(t * .4);
+    g.addColorStop(0, 'rgba(255,150,70,0)'); g.addColorStop(.7, `rgba(255,150,70,${a * .6})`); g.addColorStop(1, `rgba(255,170,90,${a})`);
+    ctx.fillStyle = g; ctx.fillRect(0, h * .55, w, h * .45);
+  }
+  // Cor das gotas: azul-claro (padrão), dourada perto do sol (chuva com sol) e prateada à noite.
+  function dropColor(a, x, y, sp) {
+    if (S.kind === 'nightrain') return `rgba(190,205,235,${a * .85})`;
+    if (S.kind === 'sunrain' && sp) {
+      const d = Math.hypot(x - sp.x, y - sp.y) / (h * .55);
+      if (d < 1) return `rgba(255,236,190,${a * (1.25 - .45 * d)})`;
+    }
+    return `rgba(205,222,255,${a})`;
+  }
+
+  function drawRain(dt, sp) {
     const vx = (S.wind || 0) * 9;
+    const warmDrops = S.kind === 'sunrain' && sp;
     for (const [lo, hi, lw, a] of [[.5, .75, 1, .22], [.75, 1.01, 1.6, .38]]) {
-      ctx.strokeStyle = `rgba(205,222,255,${a})`; ctx.lineWidth = lw; ctx.beginPath();
+      if (warmDrops) {                                   // gotas douradas perto do sol: uma a uma (são poucas)
+        ctx.lineWidth = lw;
+        for (const d of drops) {
+          if (d.z < lo || d.z >= hi) continue;
+          d.y += d.v * d.z * dt; d.x += vx * d.z * dt;
+          if (d.y > h) { d.y = -d.len - R() * h * .2; d.x = R() * (w + 400) - 200; }
+          if (d.x > w + 60) d.x -= w + 120;
+          const k = d.len / d.v;
+          ctx.strokeStyle = dropColor(a, d.x, d.y, sp); ctx.beginPath();
+          ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - vx * k, d.y - d.len); ctx.stroke();
+        }
+        continue;
+      }
+      ctx.strokeStyle = dropColor(a, 0, 0, null); ctx.lineWidth = lw; ctx.beginPath();
       for (const d of drops) {
         if (d.z < lo || d.z >= hi) continue;
         d.y += d.v * d.z * dt; d.x += vx * d.z * dt;
@@ -672,15 +752,23 @@ const Sky = (() => {
 
     const sunVis = SUN_VIS[S.kind] || 0;
     if (S.day) {
-      if (sunVis) drawSun(sp || {x: w * .72, y: h * .2}, sunVis, t);
+      if (sunVis && S.kind !== 'sunrain') drawSun(sp || {x: w * .72, y: h * .2}, sunVis, t);
+    } else if (S.kind === 'nightrain') {                 // chuva à noite: lua borrada atrás das nuvens, sem estrelas
+      const mv = S.intensity > RAIN_SUN_MAX ? 0 : MOON_RAIN_VIS * (tw ? 1 - tw.k : 1);
+      if (mv > .01) { ctx.save(); ctx.filter = 'blur(7px)'; drawMoon(moonPos(now) || {x: w * .75, y: h * .2}, mv); ctx.restore(); }
     } else {
       if (tw && sunVis) drawSun(twilightSunPos(tw), sunVis * tw.k, t);
       const vis = (STAR_VIS[S.kind] || 0) * (tw ? 1 - tw.k : 1);   // estrelas e lua surgem aos poucos
       if (vis > .01) { drawStars(t, vis); drawMoon(moonPos(now) || {x: w * .75, y: h * .2}, vis); }
     }
     drawClouds(dt, t);
+    if (S.kind === 'sunrain') {                          // sol furando as nuvens + arco-íris do lado oposto
+      drawSun(sp || {x: w * .72, y: h * .2}, sunVis, t);
+      drawRainbow(sp || {x: w * .72, y: h * .2}, t);
+    }
+    if (S.kind === 'nightrain') drawCityGlow(t);
     if (S.kind === 'fog') drawFog(dt);
-    if (drops.length) drawRain(dt);
+    if (drops.length) drawRain(dt, S.kind === 'sunrain' ? (sp || {x: w * .72, y: h * .2}) : null);
     if (flakes.length) drawSnow(dt, t);
     if (streaks.length) drawStreaks(dt);
     if (S.kind === 'storm') drawLightning(t, dt);
@@ -695,6 +783,7 @@ const Sky = (() => {
     setScene(scene, rise, set) {
       sunrise = rise ? new Date(rise) : null;
       sunset = set ? new Date(set) : null;
+      scene = {...scene, kind: rainVariant(scene)};       // chuva → sunrain / rain / nightrain (0.13.0)
       const k = `${scene.kind}|${scene.day}|${scene.intensity}|${Math.round(scene.wind / 5)}`;
       S = scene;
       if (k !== key) { key = k; build(); }

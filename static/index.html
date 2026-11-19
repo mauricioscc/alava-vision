@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Alava Vision — Painel administrativo (static/index.html) · versão 0.12.0
+  Alava Vision — Painel administrativo (static/index.html) · versão 0.13.0
 
   COMO ABRIR
     1. python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
@@ -9,6 +9,8 @@
 
   COMO REVERTER
     Com Git:  git checkout <commit> -- static/index.html   (veja os commits com git log --oneline)
+    Para a 0.12.0 (antes da prioridade contábil nas notícias): git checkout backup-antes-rss-contabeis-20261119 -- static/index.html server.py
+        (ou copie backup_rss_20261119/static/ e backup_rss_20261119/server.py por cima dos atuais)
     Para a 0.11.0 (antes do botão de tema): git checkout 6efc5ba -- static/index.html
     Para a 0.10.0 (antes do calendário): git checkout 8c60d7f -- static/index.html server.py
     Para a 0.8.1 (antes dos widgets de HTML e contador): git checkout 3ac5a57 -- static/index.html
@@ -37,6 +39,16 @@
                                      GRAD_PRESETS; prévia ao vivo #msg-live, msgPreviewSoon() → /view/message-preview
       notícias (RSS) ............... #cfg-news (#f-news-logo = logo Alava no cabeçalho), NEWS_FEEDS, NEWS_BLOCK_DEFAULT, setNewsForm(), getNewsConfig(),
                                      testNews() → POST /api/news-test
+        prioridade contábil (0.13.0)  Catálogo e PESOS PADRÃO dos feeds ... NEWS_FEEDS (campo w: 10 = máxima; Portal Contábeis = 10/9/10)
+                                     Palavras-chave que sobem a matéria .. NEWS_BOOST_DEFAULT (igual a NEWS_BOOST_WORDS do server.py)
+                                     Tempo do item (0.13.0) ......... só #f-news-per (segundos por card, padrão 30) × #f-news-cards (cards por vez);
+                                     newsDuration() vira a duração do item; o campo #grp-duration some em showCfgPanel()
+                                     Rodapé do dólar ................ #f-news-fx → config.show_fx (tela: NEWS_FX_* em server.py)
+                                     Linha de cada feed (ativar, prioridade, testar) ... feedRowHtml(), renderFeedRows(), #feed-list,
+                                     #custom-feeds, addCustomFeed(), prioOf()/weightOf() (Alta=10, Normal=5, Baixa=2),
+                                     testFeedRow() → POST /api/news-test com um feed só
+                                     Opções do item .. #f-news-prio (preferência), #f-news-ratio (proporção), #f-news-age (idade máx.),
+                                     #f-news-boost (palavras-chave); gravadas em config.weights/prioritize/preferred_ratio/max_age_days/boost_words
       voz da mensagem .............. #f-msg-speak, #f-msg-voice, #f-msg-rate, #f-msg-speak-text,
                                      refreshVoiceOptions(), listenMsg() → POST /api/tts-preview
       buscar imagens na web ........ #img-picker, openImagePicker(), runImageSearch(), pickImage()
@@ -204,6 +216,18 @@ button,input,select,textarea{font-family:inherit}
 .badge-today{background:color-mix(in srgb,#d97706 15%,transparent);color:#b45309}
 .curio-list{font-family:Consolas,'Courier New',monospace;font-size:12.5px;line-height:1.55;min-height:300px;white-space:pre}
 .feed-list{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}
+/* Notícias (0.13.0): uma linha por feed — ativar, prioridade e "Testar feed" */
+.feed-rows{display:flex;flex-direction:column;gap:6px}
+.feed-row{display:grid;grid-template-columns:1fr auto auto;gap:4px 10px;align-items:center;padding:8px 10px;
+  border:1px solid var(--border);border-radius:8px;background:var(--card)}
+.feed-row.pref{border-color:color-mix(in srgb,#65a30d 55%,var(--border))}
+.feed-row .feed-name{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;min-width:0}
+.feed-row .feed-url{flex:1;min-width:180px;font-size:13px;padding:6px 8px}
+.feed-row select{font-size:13px;padding:5px 8px}
+.feed-row .feed-res{grid-column:1/-1;font-size:12px;color:var(--soft);line-height:1.45}
+.badge-pref{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;white-space:nowrap;
+  background:color-mix(in srgb,#65a30d 18%,transparent);color:#4d7c0f}
+.badge-pref[hidden]{display:none}
 .news-test{font-size:12px;color:var(--soft);line-height:1.5;white-space:pre-line}
 .check-line{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px}
 /* Mensagem: prévia ao vivo, seções, seletor de fundo, degradês prontos */
@@ -521,7 +545,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
     <button class="nav-btn" onclick="showTab('calendar')" id="nb-calendar"><span class="ic">▦</span> Calendário</button>
     <button class="nav-btn" onclick="showTab('settings')" id="nb-settings"><span class="ic">⚙</span> Configurações</button>
   </nav>
-  <div class="sidebar-footer">Alava Vision · v0.12.0</div>
+  <div class="sidebar-footer">Alava Vision · v0.13.0</div>
 </aside>
 
 <div class="main">
@@ -795,7 +819,7 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
       </div>
 
       <div class="form-group"><label for="f-name">Nome</label><input type="text" id="f-name" placeholder="Nome para identificação"></div>
-      <div class="form-group"><label for="f-duration">Duração (segundos)</label><input type="number" id="f-duration" value="30" min="3" max="3600"></div>
+      <div class="form-group" id="grp-duration"><label for="f-duration">Duração (segundos)</label><input type="number" id="f-duration" value="30" min="3" max="3600"></div>
 
       <div id="cfg-url" class="form-group">
         <label for="f-url">URL</label>
@@ -845,15 +869,31 @@ input[type=color]{padding:4px 8px;height:38px;cursor:pointer}
 
       <div id="cfg-news" hidden class="form-group" style="gap:12px">
         <div class="form-group"><label for="f-news-title">Título da tela</label><input type="text" id="f-news-title" placeholder="Notícias"></div>
-        <div class="form-group"><label>Fontes</label><div class="feed-list" id="feed-list"></div>
-          <p class="hint">g1 Últimas e g1 Rio trazem bastante notícia policial. Para a TV do escritório, BBC, Economia e InfoMoney costumam funcionar melhor.</p></div>
-        <div class="form-group"><label for="f-news-extra">Outros feeds RSS <span class="hint">(um endereço por linha)</span></label>
-          <textarea id="f-news-extra" rows="2" placeholder="https://exemplo.com.br/rss"></textarea></div>
+        <div class="form-group"><label>Fontes <span class="hint">(marque as que entram na tela; a prioridade decide quem aparece mais)</span></label>
+          <div class="feed-rows" id="feed-list"></div>
+          <p class="hint">Prioridade <b>Alta</b> = fonte preferencial (foco contábil): ocupa a maior parte da fila. g1 Últimas e g1 Rio trazem bastante notícia policial; para a TV do escritório, BBC, Economia e InfoMoney costumam funcionar melhor.</p></div>
+        <div class="form-group"><label>Outros feeds RSS <span class="hint">(qualquer endereço RSS/Atom)</span></label>
+          <div class="feed-rows" id="custom-feeds"></div>
+          <div class="inline"><button class="btn btn-ghost btn-sm" type="button" onclick="addCustomFeed()">+ Adicionar feed</button></div></div>
+        <div class="form-group"><label class="check-line"><input type="checkbox" id="f-news-prio" checked> Dar preferência às fontes de prioridade Alta</label>
+          <p class="hint">Ligado: a fila intercala as fontes preferenciais com as demais, sobe as matérias com as palavras-chave abaixo,
+            tira as repetidas (a mesma matéria em dois feeds) e ignora as muito antigas. Desligado: todas as fontes juntas, da mais nova para a mais antiga.</p></div>
         <div class="row3">
-          <div class="form-group"><label for="f-news-per">Segundos por manchete</label><input type="number" id="f-news-per" value="9" min="4" max="60"></div>
-          <div class="form-group"><label for="f-news-max">Máximo de manchetes</label><input type="number" id="f-news-max" value="15" min="1" max="60"></div>
-          <div class="form-group"><label for="f-news-accent">Cor de destaque</label><input type="color" id="f-news-accent" value="#38bdf8"></div>
+          <div class="form-group"><label for="f-news-ratio">Vagas das preferenciais</label>
+            <select id="f-news-ratio"><option value="100">Só as preferenciais</option><option value="75" selected>3 de cada 4 (75%)</option>
+              <option value="50">Metade (50%)</option></select></div>
+          <div class="form-group"><label for="f-news-age">Ignorar com mais de (dias)</label><input type="number" id="f-news-age" value="30" min="0" max="3650"></div>
         </div>
+        <div class="form-group"><label for="f-news-boost">Palavras que sobem a notícia na fila <span class="hint">(no título; separadas por vírgula)</span></label>
+          <textarea id="f-news-boost" rows="2"></textarea></div>
+        <div class="row3">
+          <div class="form-group"><label for="f-news-per">Segundos por card</label><input type="number" id="f-news-per" value="30" min="4" max="120" oninput="newsDurHint()"></div>
+          <div class="form-group"><label for="f-news-cards">Cards por vez</label><input type="number" id="f-news-cards" value="4" min="1" max="30" oninput="newsDurHint()"></div>
+          <div class="form-group"><label for="f-news-max">Notícias na fila</label><input type="number" id="f-news-max" value="15" min="1" max="60"></div>
+        </div>
+        <p class="hint" id="news-dur-hint"></p>
+        <div class="form-group"><label for="f-news-accent">Cor de destaque</label><input type="color" id="f-news-accent" value="#38bdf8" style="max-width:120px"></div>
+        <label class="check-line"><input type="checkbox" id="f-news-fx" checked> Mostrar a cotação do dólar no rodapé (comercial ao vivo, gráfico de 30 dias e PTAX do Banco Central)</label>
         <label class="check-line"><input type="checkbox" id="f-news-img" checked> Mostrar a foto da notícia</label>
         <label class="check-line"><input type="checkbox" id="f-news-logo" checked> Mostrar a logo da Alava no cabeçalho</label>
         <div class="form-group"><label for="f-news-block">Ocultar notícias com estas palavras <span class="hint">(separadas por vírgula)</span></label>
@@ -1419,23 +1459,41 @@ function openEdit(id) {
     $('f-cd-hide').checked = !!c.hide_after;
   }
   if (item.type === 'message') setMsgForm(c);
-  if (item.type === 'news') setNewsForm(c);
+  if (item.type === 'news') setNewsForm(c, item.duration);
   if (c.notice) setNoticeFromItem(item);
   $('modal').hidden = false;
   if (item.type === 'message') msgPreviewSoon();
 }
 
 // ─── Notícias (RSS) ───────────────────────────────────────────────────────────
-// Feeds testados em 18/11/2026. Qualquer outro RSS/Atom pode ir em "Outros feeds".
+// Feeds testados em 18/11/2026 (Portal Contábeis em 19/11/2026). Qualquer outro RSS/Atom entra em "Outros feeds".
+// ── ONDE AJUSTAR OS PESOS PADRÃO ── w = peso de 1 a 10 (10 = máxima). Peso ≥ 8 = "Preferencial / Foco Contábil".
+// O seletor da linha grava Alta = 10, Normal = 5, Baixa = 2 (se você não mexer nele, o peso original é mantido).
+// O servidor tem a mesma tabela em NEWS_DEFAULT_WEIGHTS (server.py) para itens que ainda não têm peso salvo.
 const NEWS_FEEDS = [
-  {name: 'g1 — Últimas', url: 'https://g1.globo.com/rss/g1/'},
-  {name: 'g1 — Rio de Janeiro', url: 'https://g1.globo.com/rss/g1/rio-de-janeiro/'},
-  {name: 'g1 — Economia', url: 'https://g1.globo.com/rss/g1/economia/'},
-  {name: 'Agência Brasil', url: 'https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml'},
-  {name: 'BBC News Brasil', url: 'https://feeds.bbci.co.uk/portuguese/rss.xml'},
-  {name: 'ge — Esportes', url: 'https://ge.globo.com/rss/ge/'},
-  {name: 'InfoMoney', url: 'https://www.infomoney.com.br/feed/'},
+  {name: 'Portal Contábeis — Últimas notícias',       url: 'https://www.contabeis.com.br/rss/conteudo/',   w: 10},
+  {name: 'Portal Contábeis — Notícias publicadas',    url: 'https://www.contabeis.com.br/rss/noticias/',   w: 9},
+  {name: 'Portal Contábeis — Legislações publicadas', url: 'https://www.contabeis.com.br/rss/legislacao/', w: 10},
+  {name: 'Portal Contábeis — Artigos',                url: 'https://www.contabeis.com.br/rss/artigos/',    w: 8},
+  {name: 'Jornal Contábil',                           url: 'https://www.jornalcontabil.com.br/feed/',      w: 9},
+  {name: 'CFC — Conselho Federal de Contabilidade',   url: 'https://www.cfc.org.br/feed/',                 w: 9},
+  {name: 'FENACON — empresas contábeis',              url: 'https://www.fenacon.org.br/feed/',             w: 8},
+  {name: 'ConJur — Tributário',                       url: 'https://www.conjur.com.br/secoes/tributario/feed/', w: 5},
+  {name: 'g1 — Últimas', url: 'https://g1.globo.com/rss/g1/', w: 5},
+  {name: 'g1 — Rio de Janeiro', url: 'https://g1.globo.com/rss/g1/rio-de-janeiro/', w: 5},
+  {name: 'g1 — Economia', url: 'https://g1.globo.com/rss/g1/economia/', w: 5},
+  {name: 'Agência Brasil', url: 'https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml', w: 5},
+  {name: 'Agência Brasil — Economia', url: 'https://agenciabrasil.ebc.com.br/rss/economia/feed.xml', w: 5},
+  {name: 'BBC News Brasil', url: 'https://feeds.bbci.co.uk/portuguese/rss.xml', w: 5},
+  {name: 'ge — Esportes', url: 'https://ge.globo.com/rss/ge/', w: 5},
+  {name: 'InfoMoney', url: 'https://www.infomoney.com.br/feed/', w: 5},
 ];
+// Fontes marcadas num item NOVO: contábeis preferenciais (as fontes se revezam na fila, nenhuma domina) + duas
+// gerais de economia, que completam a fila (25%). O Artigos do Contábeis e o ConJur ficam desligados: é só marcar.
+const NEWS_DEFAULT_ON = ['https://www.contabeis.com.br/rss/conteudo/', 'https://www.contabeis.com.br/rss/noticias/',
+  'https://www.contabeis.com.br/rss/legislacao/', 'https://www.jornalcontabil.com.br/feed/', 'https://www.cfc.org.br/feed/',
+  'https://www.fenacon.org.br/feed/', 'https://g1.globo.com/rss/g1/economia/', 'https://agenciabrasil.ebc.com.br/rss/economia/feed.xml'];
+const NEWS_SECONDS_PER_CARD = 30;   // tempo padrão de cada card na TV (igual a NEWS_SECONDS_PER_CARD do server.py)
 // Lista inicial do filtro (só para itens novos; dá para apagar ou completar no formulário).
 // Cada palavra vale como início de palavra ("tortur" pega "tortura" e "torturar").
 // "mata" ficou de fora de propósito: bloquearia "Mata Atlântica".
@@ -1443,42 +1501,130 @@ const NEWS_BLOCK_DEFAULT = 'morte, morre, morreu, morto, morta, matar, matou, ma
   'latrocínio, estupr, abuso sexual, tortur, tragédia, massacre, chacina, suicíd, tiroteio, baleado, bala perdida, ' +
   'esfaque, sequestr, cadáver, corpo encontrado, acidente fatal, ' +
   'preso, presa, presos, agred, cárcere, tráfico de drogas, roubo, assalt, facção, miliciano';
-$('feed-list').innerHTML = NEWS_FEEDS.map((f, i) =>
-  `<label class="check-line"><input type="checkbox" data-feed="${i}"> ${esc(f.name)}</label>`).join('');
+// ── ONDE AJUSTAR AS PALAVRAS-CHAVE ── Mesma lista do servidor (NEWS_BOOST_WORDS em server.py). Até 4 letras
+// (pis, iss, mei…) vale como palavra inteira; as maiores valem como início de palavra. Só olha o título.
+const NEWS_BOOST_DEFAULT = 'receita federal, simples nacional, irpf, imposto de renda, dctfweb, esocial, reforma tributária, ' +
+  'icms, iss, pis, cofins, sped, nota fiscal, fiscal, prazo, legislação, mei, tributári, folha de pagamento, inss, fgts, cnd, ecf, ecd';
 
-function setNewsForm(c) {
-  // Padrão: BBC + g1 Economia, que no teste trouxeram bem menos notícia policial que g1 Últimas/Rio.
-  const feeds = c.feeds || [NEWS_FEEDS[4].url, NEWS_FEEDS[2].url];
-  document.querySelectorAll('[data-feed]').forEach(cb => cb.checked = feeds.includes(NEWS_FEEDS[cb.dataset.feed].url));
-  $('f-news-extra').value = feeds.filter(u => !NEWS_FEEDS.some(f => f.url === u)).join('\n');
+const PRIO_W = {alta: 10, normal: 5, baixa: 2};
+const prioOf = w => w >= 8 ? 'alta' : w <= 3 ? 'baixa' : 'normal';
+
+// Uma linha por feed: [ativar] nome/endereço [selo Preferencial]   [Prioridade ▾]  [Testar feed]
+function feedRowHtml(o) {
+  const p = prioOf(o.w), alta = p === 'alta';
+  const badge = `<span class="badge-pref" data-badge ${alta ? '' : 'hidden'}>Preferencial · Foco Contábil</span>`;
+  const name = o.custom
+    ? `<div class="feed-name"><input type="checkbox" data-on ${o.on ? 'checked' : ''} title="Ativar / desativar este feed">
+         <input type="text" class="feed-url" data-url placeholder="https://exemplo.com.br/rss" value="${esc(o.url)}">${badge}
+         <button class="btn btn-ghost btn-sm" type="button" title="Remover este feed" onclick="this.closest('.feed-row').remove()">✕</button></div>`
+    : `<label class="feed-name check-line"><input type="checkbox" data-on ${o.on ? 'checked' : ''}> ${esc(o.name)} ${badge}</label>`;
+  return `<div class="feed-row ${alta ? 'pref' : ''}" ${o.custom ? 'data-custom="1"' : `data-url="${esc(o.url)}"`} data-w0="${o.w}">
+    ${name}
+    <select data-prio onchange="feedPrioChanged(this)" title="Prioridade deste feed na fila">
+      <option value="alta" ${p === 'alta' ? 'selected' : ''}>Prioridade alta</option>
+      <option value="normal" ${p === 'normal' ? 'selected' : ''}>Normal</option>
+      <option value="baixa" ${p === 'baixa' ? 'selected' : ''}>Baixa</option></select>
+    <button class="btn btn-ghost btn-sm" type="button" onclick="testFeedRow(this)">Testar feed</button>
+    <div class="feed-res"></div></div>`;
+}
+function feedPrioChanged(sel) {
+  const row = sel.closest('.feed-row'), alta = sel.value === 'alta';
+  row.classList.toggle('pref', alta);
+  row.querySelector('[data-badge]').hidden = !alta;
+}
+function addCustomFeed(url = '', w = 5, on = true) {
+  $('custom-feeds').insertAdjacentHTML('beforeend', feedRowHtml({url, w, on, custom: true}));
+}
+// Lê uma linha. Se a prioridade não foi mexida, devolve o peso original (ex.: 9 do "Notícias publicadas").
+function rowInfo(row) {
+  const custom = !!row.dataset.custom;
+  const url = custom ? normalizeUrl(row.querySelector('[data-url]').value) : row.dataset.url;
+  const p = row.querySelector('[data-prio]').value, w0 = +row.dataset.w0;
+  return {url, custom, on: row.querySelector('[data-on]').checked, w: prioOf(w0) === p ? w0 : PRIO_W[p]};
+}
+const feedRows = () => [...document.querySelectorAll('#feed-list .feed-row, #custom-feeds .feed-row')].map(rowInfo).filter(r => r.url);
+
+// Tempo do item de notícias na TV = segundos por card × cards por vez (é o que vai para "duration" do item).
+function newsDuration() {
+  const per = Math.min(120, Math.max(4, parseInt($('f-news-per').value) || NEWS_SECONDS_PER_CARD));
+  const cards = Math.min(30, Math.max(1, parseInt($('f-news-cards').value) || 4));
+  return per * cards;
+}
+function newsDurHint() {
+  const s = newsDuration(), m = Math.floor(s / 60), r = s % 60;
+  $('news-dur-hint').textContent = `Cada vez que entra na TV, o item fica ${m ? m + ' min' + (r ? ' ' + r + ' s' : '') : s + ' s'}. ` +
+    'Na vez seguinte, continua da notícia em que parou.';
+}
+function setNewsForm(c, duration) {
+  // Item novo: Contábeis (preferencial) + g1 Economia e BBC, que no teste trouxeram bem menos notícia policial.
+  const feeds = c.feeds || NEWS_DEFAULT_ON, W = c.weights || {};
+  $('feed-list').innerHTML = NEWS_FEEDS.map(f => feedRowHtml({name: f.name, url: f.url, w: W[f.url] ?? f.w, on: feeds.includes(f.url)})).join('');
+  $('custom-feeds').innerHTML = '';
+  feeds.filter(u => !NEWS_FEEDS.some(f => f.url === u)).forEach(u => addCustomFeed(u, W[u] ?? 5, true));
+  (c.custom_off || []).forEach(u => addCustomFeed(u, W[u] ?? 5, false));   // feeds extras desligados, guardados para religar
   $('f-news-title').value = c.title || '';
-  $('f-news-per').value = c.per_headline || 9;
+  $('f-news-per').value = c.per_headline || NEWS_SECONDS_PER_CARD;
+  // Item salvo antes da 0.13.0 não tem cards_per_pass: deduz da duração salva (45 s ÷ 9 s = 5 cards), sem mudar o tempo na TV.
+  $('f-news-cards').value = c.cards_per_pass || (duration ? Math.max(1, Math.round(duration / (c.per_headline || 9))) : 4);
+  $('f-news-fx').checked = c.show_fx !== false;
   $('f-news-max').value = c.max_items || 15;
   $('f-news-accent').value = c.accent || '#38bdf8';
   $('f-news-img').checked = c.show_images !== false;
   $('f-news-logo').checked = c.show_logo !== false;
   $('f-news-block').value = c.block_words ?? NEWS_BLOCK_DEFAULT;
+  $('f-news-prio').checked = c.prioritize !== false;
+  $('f-news-ratio').value = String(c.preferred_ratio ?? 75);
+  $('f-news-age').value = c.max_age_days ?? 30;
+  $('f-news-boost').value = c.boost_words ?? NEWS_BOOST_DEFAULT;
   $('news-test').textContent = '';
+  newsDurHint();
 }
 function getNewsConfig() {
-  const feeds = [...document.querySelectorAll('[data-feed]:checked')].map(cb => NEWS_FEEDS[cb.dataset.feed].url)
-    .concat($('f-news-extra').value.split('\n').map(normalizeUrl).filter(Boolean));
+  const rows = feedRows(), weights = {};
+  rows.forEach(r => weights[r.url] = r.w);
+  const age = parseInt($('f-news-age').value);
   return {
-    feeds: [...new Set(feeds)], title: $('f-news-title').value.trim(),
-    per_headline: parseInt($('f-news-per').value) || 9, max_items: parseInt($('f-news-max').value) || 15,
+    feeds: [...new Set(rows.filter(r => r.on).map(r => r.url))], weights,
+    custom_off: [...new Set(rows.filter(r => r.custom && !r.on).map(r => r.url))],
+    title: $('f-news-title').value.trim(),
+    per_headline: parseInt($('f-news-per').value) || NEWS_SECONDS_PER_CARD, max_items: parseInt($('f-news-max').value) || 15,
     accent: $('f-news-accent').value, show_images: $('f-news-img').checked, show_logo: $('f-news-logo').checked, block_words: $('f-news-block').value,
+    prioritize: $('f-news-prio').checked, preferred_ratio: parseInt($('f-news-ratio').value) || 75,
+    max_age_days: isNaN(age) ? 30 : age, boost_words: $('f-news-boost').value,
+    cards_per_pass: parseInt($('f-news-cards').value) || 4, show_fx: $('f-news-fx').checked,
   };
 }
+const feedLabel = u => NEWS_FEEDS.find(f => f.url === u)?.name || (() => { try { return new URL(u).hostname; } catch { return u; } })();
+
 async function testNews() {
   const cfg = getNewsConfig();
   if (!cfg.feeds.length) { status('Escolha pelo menos uma fonte', 'err'); return; }
   $('news-test').textContent = 'Testando…';
   try {
     const r = await api('POST', '/api/news-test', cfg);
-    $('news-test').textContent = `✔ ${r.items.length} manchete(s) depois do filtro.` +
-      (r.items.length ? '\nMais recentes:\n' + r.items.slice(0, 3).map(i => '• ' + i.title).join('\n') : '') +
+    const pref = r.items.filter(i => i.preferred).length;
+    $('news-test').textContent = `✔ ${r.items.length} manchete(s) na fila` +
+      (r.priority ? ` (${pref} de fonte preferencial, ${r.items.length - pref} geral)` : ' (ordem por data)') + '.' +
+      '\nPor fonte (lidas → aproveitáveis):\n' + r.feeds.map(f => `• ${feedLabel(f.url)}: ${f.error ? '⚠ não li' : f.read + ' → ' + f.fresh}`).join('\n') +
+      (r.items.length ? '\nPrimeiras da fila:\n' + r.items.slice(0, 4).map(i => `• ${i.category ? '[' + i.source + ' • ' + i.category + '] ' : ''}${i.title}`).join('\n') : '') +
       (r.errors.length ? '\n⚠ Não consegui ler: ' + r.errors.join(' | ') : '');
   } catch(e) { $('news-test').textContent = '⚠ ' + e.message; }
+}
+// "Testar feed" da linha: lê só aquele feed, com as regras de idade e palavras ocultas do formulário.
+async function testFeedRow(btn) {
+  const row = btn.closest('.feed-row'), out = row.querySelector('.feed-res'), info = rowInfo(row), cfg = getNewsConfig();
+  if (!info.url) { out.textContent = '⚠ Digite o endereço do feed.'; return; }
+  out.textContent = 'Testando…';
+  try {
+    const r = await api('POST', '/api/news-test', {feeds: [info.url], weights: {[info.url]: info.w}, prioritize: cfg.prioritize,
+      max_age_days: cfg.max_age_days, block_words: cfg.block_words, boost_words: cfg.boost_words, max_items: 60});
+    const f = r.feeds[0] || {read: 0, fresh: 0, error: r.errors[0] || 'sem resposta'};
+    if (f.error) out.textContent = '✖ Não consegui ler: ' + f.error;
+    else if (!f.read) out.textContent = '⚠ O feed respondeu, mas veio sem notícias.';
+    else if (!f.fresh) out.textContent = `⚠ ${f.read} lida(s), mas nenhuma aproveitável` + (cfg.max_age_days
+      ? ` (todas com mais de ${cfg.max_age_days} dias ou ocultas pelo filtro) — o feed parece parado.` : ' (todas ocultas pelo filtro de palavras).');
+    else out.textContent = `✔ ${f.read} lida(s), ${f.fresh} aproveitável(is).` + (r.items[0] ? ` Mais recente: “${r.items[0].title}”` : '');
+  } catch(e) { out.textContent = '⚠ ' + e.message; }
 }
 
 // ─── Mensagem: formulário ↔ config ───────────────────────────────────────────
@@ -1665,6 +1811,8 @@ function setType(t) {
 
 function showCfgPanel(t) {
   ALL_TYPES.forEach(x => $(`cfg-${x}`).hidden = x !== t);
+  // Notícias (0.13.0): o tempo é "Segundos por card" × "Cards por vez" (newsDuration()); o campo Duração some.
+  $('grp-duration').hidden = t === 'news';
 }
 
 function normalizeUrl(u) { u = u.trim(); return u && !/^https?:\/\//i.test(u) ? 'https://' + u : u; }
@@ -1677,7 +1825,7 @@ function previewUrlField() {
 
 async function saveItem(dup) {   // dup = "Salvar e duplicar": salva e abre a cópia para editar
   const name = $('f-name').value.trim();
-  const duration = parseInt($('f-duration').value) || 30;
+  const duration = currentType === 'news' ? newsDuration() : (parseInt($('f-duration').value) || 30);
   if (!name) { status('Informe um nome', 'err'); return; }
   let config = {};
   if (currentType === 'url') {
