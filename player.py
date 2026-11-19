@@ -1,5 +1,5 @@
 """
-Alava Vision — Player (player.py) · versão 0.16.0
+Alava Vision — Player (player.py) · versão 0.17.0
 
 Abre o Chrome em tela cheia SEMPRE no monitor da TV (por padrão o 2º monitor) e exibe
 o conteúdo que o servidor manda exibir AGORA, respeitando a programação do painel.
@@ -78,6 +78,10 @@ MAPA DO CÓDIGO
     Foto da TV no painel (0.16.0) ... maybe_shot() no run() → take_shot() (CDP, 960 px) → send_shot()
                                       → POST /api/player/shot; SHOT_EVERY (300 s), SHOT_FIRST, SHOT_SETTLE
     Notícias sem repetir (0.16.0) ... item_url() abre /view/news/{id}?tv=1 (o servidor anota o que passou)
+    Aviso urgente (0.17.0) .......... state["urgent"] na signature(); after_change() "urgent"; no run(), urgent_now
+                                      → mostra /view/urgent até "until" e depois volta ao item interrompido
+    Relatório (0.17.0) .............. end_reason no run() → report_now(prev_reason) diz como o item anterior terminou;
+                                      report_skipped() → POST /api/player/skipped (item pulado sem ir à tela)
     URL de cada tipo de item ........ item_url(), traffic_target() (trânsito → Waze direto)
     Faixa da Alava sobre o Waze ..... TRAFFIC_BAND_JS, traffic_band_script()  (registrada no run())
     Loop de exibição ................ run()
@@ -98,7 +102,7 @@ from dotenv import load_dotenv
 
 import monitors
 
-__version__ = "0.16.0"
+__version__ = "0.17.0"
 
 BASE = Path(__file__).parent
 load_dotenv(BASE / ".env")
@@ -137,7 +141,7 @@ def signature(state: dict) -> tuple:
     "skip" (0.12.0) muda quando alguém clica em "Pular item" no painel; "back" em "Voltar item" e
     "card" em "Notícia anterior/próxima" (0.16.0)."""
     return (state.get("version"), state.get("slot"), state.get("skip"), state.get("back"),
-            tuple(state.get("card") or ()))
+            tuple(state.get("card") or ()), (state.get("urgent") or {}).get("id"))
 
 
 class PushChannel:
@@ -341,18 +345,21 @@ def after_change(item: dict, old: dict, new: dict) -> tuple[str, int | None]:
       "next",  None    → clicaram em "Pular item" no painel: encerra este e vai para o próximo;
       "back",  None    → clicaram em "Voltar item" (0.16.0): o run() volta para o ANTERIOR da fila;
       "card",  None    → clicaram em "Notícia anterior/próxima" (0.16.0): o item continua; o run()
-                         troca a manchete na página (newsNav).
+                         troca a manchete na página (newsNav);
+      "urgent", None   → aviso urgente começou/terminou (0.17.0): o run() interrompe e depois volta ao item.
     idx None = manter o índice atual.
     """
     if new.get("slot") != old.get("slot"):
         return "restart", 0
+    if urgent_id(new) != urgent_id(old):             # aviso urgente começou ou foi encerrado (0.17.0)
+        return "urgent", None
     if new.get("skip") != old.get("skip"):           # botão "Pular item" do painel (0.12.0)
         return "next", None                          # idx já aponta para o próximo da fila
     if new.get("back") != old.get("back"):           # botão "Voltar item" do painel (0.16.0)
         return "back", None
     if (new.get("card") or [0])[0] != (old.get("card") or [0])[0]:   # notícia anterior/próxima (0.16.0)
         return "card", None
-    if item.get("id") == "auto":                     # curiosidade intercalada: não está na lista
+    if item.get("id") in ("auto", "urgent"):         # curiosidade intercalada / aviso urgente: fora da lista
         return "keep", None
     new_items, old_items = playable(new), playable(old)
     new_ids = [x["id"] for x in new_items]
@@ -367,11 +374,14 @@ def after_change(item: dict, old: dict, new: dict) -> tuple[str, int | None]:
     return "skip", nxt
 
 
-def report_now(server: str, item: dict, duration: int, source: str, nxt: str | None, skip_seq) -> None:
+def report_now(server: str, item: dict, duration: int, source: str, nxt: str | None, skip_seq,
+               prev_reason: str = "tempo") -> None:
     """Conta ao servidor o que entrou na tela, para o painel mostrar "Na TV agora" (0.12.0).
+    prev_reason (0.17.0, relatório): como o item ANTERIOR terminou (tempo, pulado, voltou, login, waze…).
     Numa thread à parte e sem esperar: se o servidor não responder, a TV segue normalmente."""
     body = json.dumps({"id": item.get("id"), "name": item.get("name"), "type": item.get("type"),
-                       "duration": duration, "source": source, "next": nxt, "skip_seq": skip_seq}).encode()
+                       "duration": duration, "source": source, "next": nxt, "skip_seq": skip_seq,
+                       "prev_reason": prev_reason}).encode()
 
     def send():
         try:
@@ -382,6 +392,33 @@ def report_now(server: str, item: dict, duration: int, source: str, nxt: str | N
             pass   # servidor antigo (sem a rota) ou reiniciando
 
     threading.Thread(target=send, name="agora", daemon=True).start()
+
+
+def report_skipped(server: str, item: dict, source: str, reason: str) -> None:
+    """Relatório (0.17.0): o item foi pulado SEM ir à tela (ex.: Waze fora há pouco)."""
+    body = json.dumps({"id": item.get("id"), "name": item.get("name"), "type": item.get("type"),
+                       "duration": item.get("duration"), "source": source, "reason": reason}).encode()
+
+    def send():
+        try:
+            rq = urllib.request.Request(f"{server}/api/player/skipped", data=body, method="POST",
+                                        headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(rq, timeout=3).close()
+        except Exception:
+            pass
+
+    threading.Thread(target=send, name="relatorio", daemon=True).start()
+
+
+def urgent_id(state: dict) -> str | None:
+    """Id do aviso urgente AINDA válido (o que venceu sozinho não interrompe o item seguinte)."""
+    u = state.get("urgent") or {}
+    return u.get("id") if u.get("until", 0) > time.time() else None
+
+
+# Como o item terminou, para o relatório (0.17.0): ação de after_change() → motivo
+END_BY_ACTION = {"restart": "programacao", "reload": "editado", "skip": "removido", "next": "pulado",
+                 "back": "voltou", "urgent": "urgente"}
 
 
 # ─── Avisos para o painel: site no login e Waze fora (0.15.0) ─────────────────
@@ -701,6 +738,7 @@ def run(args, push: PushChannel):
             current_url = None
             registered_band = None   # título da faixa do Waze já registrada (traffic_band_script)
             last_curiosity = 0.0   # 0 = a primeira curiosidade automática pode aparecer logo
+            end_reason = "tempo"   # relatório (0.17.0): como o item da tela terminou (vai no próximo report_now)
             next_shot = time.time() + SHOT_FIRST   # foto da TV para o painel (0.16.0)
 
             def maybe_shot(name: str, since: float) -> None:
@@ -723,8 +761,11 @@ def run(args, push: PushChannel):
                         log("Sem API, usando última programação:", e)
 
                 items = playable(state)
+                # Aviso urgente (0.17.0): por cima de tudo até "until"; não avança a playlist
+                urg = state.get("urgent") or {}
+                urgent_now = urg.get("until", 0) > time.time()
 
-                if not items:
+                if not items and not urgent_now:
                     show_html(page, IDLE_HTML)
                     current_url = None
                     idx = 0
@@ -736,15 +777,20 @@ def run(args, push: PushChannel):
                             break
                     continue
 
-                idx %= len(items)
-                extra = curiosity_due(state, last_curiosity)
-                if extra:                        # intercala sem avançar a playlist
+                idx %= max(1, len(items))
+                extra = None if urgent_now else curiosity_due(state, last_curiosity)
+                if urgent_now:
+                    item = {"id": "urgent", "type": "urgent", "name": "Aviso urgente", "config": {},
+                            "duration": max(1, int(urg["until"] - time.time()))}
+                elif extra:                      # intercala sem avançar a playlist
                     item, last_curiosity = extra, time.time()
                 else:
                     item = items[idx]
                     idx += 1
                 duration = max(3, int(item.get("duration", 30)))
-                if item["type"] == "today":              # 0.14.0: cada card fica "per" s; o item, per × cards de hoje
+                if urgent_now:
+                    url = f"{server}/view/urgent"
+                elif item["type"] == "today":            # 0.14.0: cada card fica "per" s; o item, per × cards de hoje
                     per = today_per_card(item, state)
                     duration = per * max(1, today_count(state))
                     url = f"{server}/view/today?per={per}"
@@ -766,6 +812,7 @@ def run(args, push: PushChannel):
                 blocked = None
                 if is_waze and "waze" in alerts_on and time.time() - waze_fail_at < WAZE_RETRY:
                     if not alone:
+                        report_skipped(server, item, src.get("name", ""), "waze")
                         time.sleep(.2)
                         continue                            # Waze falhou há pouco: não insiste (reCAPTCHA)
                     blocked = ("🚗", "Trânsito indisponível no momento",
@@ -791,14 +838,16 @@ def run(args, push: PushChannel):
                         if is_waze:
                             waze_fail_at = time.time()
                             set_alert("waze", "waze", item, url, "o Waze não abriu (" + str(e).splitlines()[0][:90] + ")")
+                        report_skipped(server, item, src.get("name", ""), "waze" if is_waze else "erro")
                         time.sleep(2)
                         continue
                 waze_pending = is_waze and reloaded         # espera a chamada do trânsito desta carga
                 next_login = nav_t + LOGIN_FIRST_CHECK if watch_login and not blocked else None
 
                 # Painel "Na TV agora": este item e o próximo da fila
-                nxt = items[idx % len(items)]["name"] if len(items) > 1 or extra else None
-                report_now(server, item, duration, src.get("name", ""), nxt, state.get("skip"))
+                nxt = items[idx % len(items)]["name"] if items and (len(items) > 1 or extra or urgent_now) else None
+                prev_reason, end_reason = end_reason, "tempo"     # relatório: como o anterior terminou
+                report_now(server, item, duration, src.get("name", ""), nxt, state.get("skip"), prev_reason)
 
                 # Durante a exibição, confere se algo mudou: versão (alguém salvou no painel)
                 # ou slot (a grade mudou de bloco). Com o WebSocket ligado, o aviso chega na
@@ -830,6 +879,7 @@ def run(args, push: PushChannel):
                             set_alert("waze", "waze", item, url, f"o Waze não entregou o trânsito ({why})")
                             current_url = None
                             if not alone:
+                                end_reason = "waze"
                                 break
                             show_html(page, blocked_html("🚗", "Trânsito indisponível no momento",
                                                           "O Waze não está entregando o trânsito. A TV tenta de novo em alguns minutos."))
@@ -845,6 +895,7 @@ def run(args, push: PushChannel):
                                       "abriu na tela de login" + (" com captcha" if res.get("captcha") else ""))
                             current_url = None
                             if not alone:
+                                end_reason = "login"
                                 break
                             show_html(page, blocked_html("🔒", f"{item.get('name', 'O site')} pediu login",
                                                           "Faça o login no computador da TV (o passo a passo está no aviso do painel)."))
@@ -855,6 +906,7 @@ def run(args, push: PushChannel):
                         try:
                             if page.evaluate(VIDEO_ENDED_JS):
                                 log("Vídeo terminou — próximo item")
+                                end_reason = "video_fim"
                                 break
                         except Exception:
                             pass  # página trocando ou fechada: segue pelo tempo normal
@@ -885,11 +937,19 @@ def run(args, push: PushChannel):
                             continue
                         if action == "back":
                             idx = back_index(item, playable(state), idx)
+                        if action == "urgent":
+                            ids = [x["id"] for x in playable(state)]
+                            if item.get("id") in ids:    # o aviso interrompeu este item: ele volta depois do aviso
+                                idx = ids.index(item["id"])
+                        end_reason = ("encerrado" if action == "urgent" and item.get("id") == "urgent"
+                                      else END_BY_ACTION.get(action, "interrompido"))
                         log({"restart": "Programação mudou — trocando conteúdo",
                              "reload": "Item editado no painel — mostrando de novo",
                              "skip": "Item removido/desativado — próximo",
                              "next": "Pulado pelo painel — próximo item",
-                             "back": "Voltando ao item anterior (painel)"}[action])
+                             "back": "Voltando ao item anterior (painel)",
+                             "urgent": "Aviso urgente — " + ("no ar" if (state.get("urgent") or {}).get("id")
+                                                             else "encerrado")}[action])
                         current_url = None
                         deadline = 0
         finally:

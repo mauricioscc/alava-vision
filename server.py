@@ -1,5 +1,5 @@
 """
-Alava Vision — Servidor (server.py) · versão 0.16.0
+Alava Vision — Servidor (server.py) · versão 0.17.0
 
 COMO RODAR
     pip install -r requirements.txt
@@ -55,6 +55,9 @@ COMO REVERTER
     Para a 0.8.0 (antes da correção da garoa): copie backup_v0.8.0_20261118/server.py por cima do atual.
     Para a 0.8.1 (antes dos widgets de HTML e contador):  git checkout 3ac5a57 -- server.py player.py static/index.html
     Itens de HTML/contador criados na 0.9.0 ficam no banco; na 0.8.1 eles só aparecem sem tela.
+    Para a 0.16.0 (antes da agenda fiscal, do aviso urgente e do relatório):
+        git checkout a1bb3b8 -- server.py player.py static/index.html   (ou copie backup_v0.17.0_20261119/)
+        As tabelas play_log e news_log ficam no banco e a 0.16.0 só as ignora.
     Para a 0.15.0 (antes da foto da TV, dos botões Voltar/Notícia e das notícias sem repetir):
         git checkout d2733ea -- server.py player.py static/index.html   (ou copie backup_v0.16.0_20261119/)
         O arquivo data/news_seen.json pode ser apagado (a 0.15.0 não usa).
@@ -114,6 +117,13 @@ MAPA DO CÓDIGO
                                       {dir: -1|1} (_card_cmd → state["card"]; o player chama newsNav() na tela)
     Foto da TV (0.16.0) ............. POST /api/player/shot (o player manda a cada 5 min, só localhost; fica na
                                       memória, _tv_shot), GET /api/player/shot (com login); hora em GET /api/player/now
+    Agenda fiscal (0.17.0) .......... FISCAL_RULES (ONDE AJUSTAR UM PRAZO), _fiscal_date(), fiscal_upcoming(),
+                                      _fiscal_custom(); GET /api/fiscal/rules, POST /api/fiscal-test, /view/fiscal/{id}
+    Aviso urgente (0.17.0) .......... _urgent, urgent_active(), POST/DELETE /api/urgent, /view/urgent,
+                                      state["urgent"] (assinatura do WebSocket); "Pular" com aviso no ar = encerrar
+    Relatório da TV (0.17.0) ........ tabelas play_log e news_log; report_log_play() (dentro de POST /api/player/now),
+                                      POST /api/player/skipped, report_data(), GET /api/report, GET /api/report.csv,
+                                      report_prune() (REPORT_KEEP_DAYS = 90), END_REASONS
     Notícias sem repetir (0.16.0) ... /view/news/{id}?tv=1 e GET /api/news/{id}?tv=1; POST /api/news-seen (a tela da
                                       TV anota o card, só localhost), GET/DELETE /api/news-seen (painel: contar/zerar)
     O que está no ar agora .......... resolve_now() (escolhe a régua do dia), _pick_block(), current_state(),
@@ -190,7 +200,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-__version__ = "0.16.0"
+__version__ = "0.17.0"
 
 load_dotenv()
 
@@ -305,6 +315,19 @@ def init_db():
                 created_at INTEGER
             )""")
         con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+        # 0.17.0: relatório do que passou na TV (report_log_play) e das manchetes exibidas
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS play_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT, started REAL, ended REAL,
+                item_id TEXT, name TEXT, type TEXT, source TEXT, planned INTEGER, end_reason TEXT
+            )""")
+        con.execute("CREATE INDEX IF NOT EXISTS play_log_day ON play_log(day)")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS news_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT, at REAL, title TEXT, source TEXT,
+                item_id TEXT, item_name TEXT
+            )""")
+        con.execute("CREATE INDEX IF NOT EXISTS news_log_day ON news_log(day)")
         con.execute("CREATE TABLE IF NOT EXISTS version (id INTEGER PRIMARY KEY CHECK (id = 1), val INTEGER DEFAULT 0)")
         con.execute("INSERT OR IGNORE INTO version VALUES (1, 0)")
         con.commit()
@@ -923,6 +946,8 @@ def current_state() -> dict:
     state["skip"] = _skip_seq   # botão "Pular item" do painel (o player compara com o anterior)
     state["back"] = _back_seq   # 0.16.0: botão "Voltar item"
     state["card"] = [_card_cmd["seq"], _card_cmd["dir"]]   # 0.16.0: notícia anterior/próxima ([nº do clique, -1|1])
+    u = urgent_active()                   # 0.17.0: aviso urgente por cima da programação
+    state["urgent"] = {"id": u["id"], "until": u["until"]} if u else None
     # Avisos por data intercalados agora: entram na assinatura do WebSocket para o player
     # receber a lista nova quando um aviso começa ou termina (ex.: início do horário de serviço)
     state["notices"] = [i["id"] for i in state["items"] if i.get("playlist_id") == NOTICE_PLAYLIST]
@@ -963,6 +988,7 @@ async def player_now_report(request: Request):
     _now_playing.clear()
     _now_playing.update({k: body.get(k) for k in ("id", "name", "type", "duration", "source", "next", "skip_seq")})
     _now_playing["started"] = time.time()
+    await asyncio.to_thread(report_log_play, body)     # 0.17.0: relatório do que passou na TV
     return {"ok": True}
 
 
@@ -973,13 +999,13 @@ def player_now():
     shot = ({"shot_ts": _tv_shot["at"], "shot_at": datetime.fromtimestamp(_tv_shot["at"]).strftime("%H:%M"),
              "shot_item": _tv_shot["item"]} if _tv_shot else {"shot_ts": 0})
     if not _now_playing:
-        return {"playing": False, **shot}
+        return {"playing": False, **shot, **urgent_public()}
     elapsed = time.time() - _now_playing["started"]
     dur = int(_now_playing.get("duration") or 0)
     return {"playing": True, **_now_playing, "elapsed": round(elapsed, 1),
             "remaining": max(0, round(dur - elapsed)),
             # passou bem do tempo e o player não avisou o item seguinte: provavelmente está fechado
-            "stale": elapsed > dur + 90, "players": len(_players), **shot}
+            "stale": elapsed > dur + 90, "players": len(_players), **shot, **urgent_public()}
 
 
 # ─── Avisos do player para o painel (0.15.0) ─────────────────────────────────
@@ -1026,6 +1052,9 @@ def player_alerts():
 @app.post("/api/player/skip", dependencies=[Depends(require_auth)])
 def player_skip():
     global _skip_seq
+    if urgent_active():          # 0.17.0: "Pular" com aviso urgente no ar = encerrar o aviso
+        _urgent.clear()
+        return {"ok": True, "urgent_closed": True, "players": len(_players)}
     _skip_seq += 1
     return {"ok": True, "skip": _skip_seq, "players": len(_players)}
 
@@ -1100,7 +1129,7 @@ def _signature(state: dict) -> tuple:
     # curiosidades automáticas mudam em Configurações (que não alteram a versão).
     return (state.get("version"), state.get("slot"), json.dumps(state.get("today"), sort_keys=True),
             tuple(state.get("notices") or ()), state.get("skip"), state.get("back"),
-            tuple(state.get("card") or ()))
+            tuple(state.get("card") or ()), (state.get("urgent") or {}).get("id"))
 
 
 async def _send(ws: WebSocket, text: str) -> None:
@@ -1148,7 +1177,8 @@ async def _notify_players(request: Request, call_next):
     response = await call_next(request)
     # /api/player/now, a foto da TV e a anotação de notícias exibidas vêm do próprio player: não mudam a programação
     if (request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/")
-            and request.url.path not in ("/api/player/now", "/api/player/shot", "/api/news-seen")
+            and request.url.path not in ("/api/player/now", "/api/player/shot", "/api/news-seen", "/api/player/skipped",
+                                         "/api/fiscal-test", "/api/news-test")
             and response.status_code < 400 and _state_changed is not None):
         _state_changed.set()
     return response
@@ -1823,6 +1853,15 @@ async def news_seen_add(request: Request):
         raise HTTPException(403, "Só a TV deste computador anota as notícias exibidas")
     body = await request.json()
     news_mark_seen(str(body.get("title") or ""), str(body.get("link") or ""))
+    try:                                   # 0.17.0: relatório das manchetes exibidas
+        with db() as con:
+            con.execute("INSERT INTO news_log (day, at, title, source, item_id, item_name) VALUES (?,?,?,?,?,?)",
+                        (datetime.now().strftime("%Y-%m-%d"), time.time(), str(body.get("title") or "")[:300],
+                         str(body.get("source") or "")[:80], str(body.get("item_id") or "")[:20],
+                         str(body.get("item_name") or "")[:120]))
+            con.commit()
+    except sqlite3.Error as e:
+        print(f"[relatório] {e}")
     return {"ok": True}
 
 
@@ -2176,6 +2215,463 @@ def today_auto_settings() -> dict:
 # Por item: config.per_card. Curiosidades automáticas: Configurações → today_per_card.
 # O tempo do item na TV = segundos por card × cards de hoje (calculado no player, ver run()).
 TODAY_SECONDS_PER_CARD = 30
+
+
+# ─── Agenda fiscal (0.17.0) ───────────────────────────────────────────────────
+#
+# Item "fiscal": a TV mostra os vencimentos dos próximos config.days dias (padrão 10), agrupados por data,
+# com "HOJE" / "AMANHÃ" / "EM N DIAS" e a nota quando o prazo mudou por feriado ou fim de semana.
+# As regras ficam em FISCAL_RULES (conferidas em 19/11/2026; a DCTFWeb passou a vencer no último dia útil
+# do mês seguinte pela IN RFB 2.248/2025). Dia útil = segunda a sexta, menos os feriados NACIONAIS
+# (BrasilAPI, a mesma lista do "Hoje é dia"; sem internet, FISCAL_FIXED_HOLIDAYS). Feriado municipal não entra.
+#   "adjust": "prev" → caiu em dia não útil, ANTECIPA (FGTS, INSS, IRRF, PIS/Cofins, eSocial, Reinf…)
+#             "next" → PRORROGA para o próximo dia útil (DAS do Simples e DAS-MEI)
+#   "last_bd"         → último dia útil do mês (DCTFWeb, IRPJ/CSLL, ECD, ECF, IRPF)
+#   "nth_bd" + "sat"  → N-ésimo dia útil, contando sábado (salários: 5º dia útil, art. 459 da CLT)
+#   "month"           → regra anual (só naquele mês)
+# Por item: config.rules (ids ligados; sem a chave = FISCAL_DEFAULT_ON), config.custom (linhas próprias,
+# ver _fiscal_custom), config.per_page (segundos por página quando não cabe numa tela).
+# ── ONDE AJUSTAR UM PRAZO ── só nesta tabela.
+FISCAL_RULES = [
+    {"id": "esocial", "name": "eSocial — folha (eventos periódicos)", "who": "Competência do mês anterior", "day": 15, "adjust": "prev"},
+    {"id": "reinf", "name": "EFD-Reinf", "who": "Retenções e CPRB do mês anterior", "day": 15, "adjust": "prev"},
+    {"id": "salario", "name": "Pagamento de salários", "who": "5º dia útil (sábado conta)", "nth_bd": 5, "sat": True},
+    {"id": "fgts", "name": "FGTS Digital", "who": "Guia do mês anterior", "day": 20, "adjust": "prev"},
+    {"id": "inss", "name": "INSS — contribuições previdenciárias", "who": "DARF da DCTFWeb", "day": 20, "adjust": "prev"},
+    {"id": "irrf", "name": "IRRF — salários e serviços", "who": "DARF do mês anterior", "day": 20, "adjust": "prev"},
+    {"id": "das", "name": "DAS e PGDAS-D — Simples Nacional", "who": "Empresas do Simples", "day": 20, "adjust": "next"},
+    {"id": "mei", "name": "DAS-MEI", "who": "Microempreendedor individual", "day": 20, "adjust": "next"},
+    {"id": "piscofins", "name": "PIS e Cofins", "who": "Lucro real e presumido", "day": 25, "adjust": "prev"},
+    {"id": "dctfweb", "name": "DCTFWeb — entrega", "who": "Declaração do mês anterior", "last_bd": True},
+    {"id": "irpj", "name": "IRPJ e CSLL", "who": "Estimativa mensal / cota trimestral", "last_bd": True},
+    {"id": "defis", "name": "DEFIS", "who": "Simples Nacional — anual", "month": 3, "day": 31, "adjust": "prev"},
+    {"id": "irpf", "name": "Declaração do IRPF", "who": "Pessoa física — confira o ato do ano", "month": 5, "last_bd": True},
+    {"id": "dasn", "name": "DASN-SIMEI", "who": "MEI — declaração anual", "month": 5, "day": 31, "adjust": "prev"},
+    {"id": "ecd", "name": "ECD — Escrituração Contábil Digital", "who": "Anual — confira o ato do ano", "month": 5, "last_bd": True},
+    {"id": "ecf", "name": "ECF — Escrituração Contábil Fiscal", "who": "Anual", "month": 7, "last_bd": True},
+    {"id": "13a", "name": "13º salário — 1ª parcela", "who": "Empregadores", "month": 11, "day": 30, "adjust": "prev"},
+    {"id": "13b", "name": "13º salário — 2ª parcela", "who": "Empregadores", "month": 12, "day": 20, "adjust": "prev"},
+]
+FISCAL_DEFAULT_ON = [r["id"] for r in FISCAL_RULES]
+FISCAL_DAYS = 10
+FISCAL_FIXED_HOLIDAYS = {"01-01": "Confraternização mundial", "04-21": "Tiradentes", "05-01": "Dia do trabalho",
+                         "09-07": "Independência do Brasil", "10-12": "Nossa Senhora Aparecida", "11-02": "Finados",
+                         "11-15": "Proclamação da República", "11-20": "Dia da consciência negra", "12-25": "Natal"}
+
+
+def _fiscal_holidays(years) -> dict[str, str]:
+    out = {}
+    for y in years:
+        got = {h["date"]: h["name"] for h in holidays(y) if h.get("name") != "Páscoa"}
+        out.update(got or {f"{y}-{k}": v for k, v in FISCAL_FIXED_HOLIDAYS.items()})
+    return out
+
+
+def _fiscal_custom(text: str) -> tuple[list[dict], list[str]]:
+    """Linhas próprias do item: "Nome | dia | regra" (regra = antecipa, prorroga ou nada).
+      ISS Rio | 10 | prorroga          → todo mês, dia 10
+      Alvará | 31/01 | antecipa        → todo ano, 31 de janeiro
+      Balancete | último dia útil      → todo mês, último dia útil
+    """
+    import re
+    rules, errors = [], []
+    for n, line in enumerate(str(text or "").splitlines(), 1):
+        parts = [p.strip() for p in line.split("|")]
+        if not parts[0] or parts[0].startswith("#"):
+            continue
+        if len(parts) < 2:
+            errors.append(f"linha {n}: use Nome | dia | regra"); continue
+        r = {"id": f"custom{n}", "name": parts[0][:80], "who": "", "custom": True}
+        adj = _plain(parts[2]) if len(parts) > 2 else ""
+        r["adjust"] = "prev" if adj.startswith("antecip") else "next" if adj.startswith("prorrog") else "none"
+        when = _plain(parts[1])                          # _plain tira a "/": a data usa o texto original
+        m = re.fullmatch(r"(\d{1,2})\s*/\s*(\d{1,2})", parts[1].strip())
+        if "ultimo dia util" in when:
+            r["last_bd"] = True
+        elif m and 1 <= int(m[2]) <= 12 and 1 <= int(m[1]) <= 31:
+            r.update(day=int(m[1]), month=int(m[2]))
+        elif when.isdigit() and 1 <= int(when) <= 31:
+            r["day"] = int(when)
+        else:
+            errors.append(f"linha {n}: não entendi o dia '{parts[1]}' (use 10, 31/01 ou último dia útil)"); continue
+        rules.append(r)
+    return rules, errors
+
+
+def _fiscal_date(rule: dict, year: int, month: int, hol: dict):
+    """(data do vencimento, data original se mudou) para a regra naquele mês, ou None."""
+    import calendar
+    from datetime import date, timedelta
+    if rule.get("month") and rule["month"] != month:
+        return None
+    last = calendar.monthrange(year, month)[1]
+    bd = lambda d, sat=False: (d.weekday() < 5 or (sat and d.weekday() == 5)) and d.isoformat() not in hol
+    if rule.get("last_bd"):
+        d = date(year, month, last)
+        while not bd(d):
+            d -= timedelta(days=1)
+        return d, None
+    if rule.get("nth_bd"):
+        d, n = date(year, month, 1), 0
+        while True:
+            if bd(d, rule.get("sat")):
+                n += 1
+                if n == rule["nth_bd"]:
+                    return d, None
+            d += timedelta(days=1)
+    orig = date(year, month, min(rule["day"], last))
+    d, step = orig, {"prev": -1, "next": 1}.get(rule.get("adjust"), 0)
+    while step and not bd(d):
+        d += timedelta(days=step)
+    return d, (orig if d != orig else None)
+
+
+def fiscal_upcoming(cfg: dict, start=None) -> dict:
+    """Vencimentos de hoje até hoje + config.days, em ordem de data."""
+    from datetime import date, timedelta
+    start = start or date.today()
+    days = _num(cfg.get("days"), FISCAL_DAYS, 1, 60)
+    end = start + timedelta(days=days)
+    on = cfg.get("rules") if isinstance(cfg.get("rules"), list) else FISCAL_DEFAULT_ON
+    custom, errors = _fiscal_custom(cfg.get("custom", ""))
+    rules = [r for r in FISCAL_RULES if r["id"] in on] + custom
+    hol = _fiscal_holidays(range(start.year - 1, end.year + 2))
+    out, y, m = [], start.year, start.month
+    if m == 1:
+        y, m = y - 1, 12
+    else:
+        m -= 1                                    # começa no mês anterior: prorrogação pode cair neste
+    while (y, m) <= (end.year, end.month):
+        for r in rules:
+            got = _fiscal_date(r, y, m, hol)
+            if not got or not (start <= got[0] <= end):
+                continue
+            d, orig = got
+            why = ""
+            if orig:
+                why = (f"{orig.day:02d}/{orig.month:02d} é feriado ({hol[orig.isoformat()]})" if orig.isoformat() in hol
+                       else f"{orig.day:02d}/{orig.month:02d} cai num {WEEKDAYS_PT[orig.weekday()]}")
+                why = ("Antecipado: " if d < orig else "Prorrogado: ") + why
+            out.append({"id": r["id"], "name": r["name"], "who": r.get("who", ""), "date": d.isoformat(),
+                        "in_days": (d - start).days, "weekday": WEEKDAYS_PT[d.weekday()], "note": why,
+                        "custom": bool(r.get("custom"))})
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    out.sort(key=lambda x: (x["date"], x["custom"], x["name"]))
+    return {"start": start.isoformat(), "end": end.isoformat(), "days": days, "items": out, "errors": errors}
+
+
+@app.get("/api/fiscal/rules")
+def fiscal_rules():
+    """Lista para o painel montar os liga/desliga do item."""
+    return {"rules": FISCAL_RULES, "default_on": FISCAL_DEFAULT_ON, "days": FISCAL_DAYS}
+
+
+@app.post("/api/fiscal-test", dependencies=[Depends(require_auth)])
+async def fiscal_test(request: Request):
+    """Painel: mostra a lista que vai para a TV com a configuração digitada (antes de salvar)."""
+    return await asyncio.to_thread(fiscal_upcoming, await request.json())
+
+
+@app.get("/view/fiscal/{item_id}")
+def view_fiscal(item_id: str):
+    """Tela da agenda fiscal. Datas agrupadas; se não couber, troca de página a cada config.per_page s.
+    Recarrega sozinha a cada 30 min (vira o dia sem precisar do player)."""
+    cfg = _item_config(item_id)
+    data = json.dumps(fiscal_upcoming(cfg), ensure_ascii=False).replace("</", "<\\/")
+    title = html.escape(str(cfg.get("title") or "Agenda fiscal"))
+    per = _num(cfg.get("per_page"), 15, 5, 120)
+    return HTMLResponse(f"""<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5f9;font-family:'Segoe UI',system-ui,sans-serif}}
+body{{background:radial-gradient(120% 120% at 15% 0%,#132a52 0%,#0b1120 60%)}}
+.top{{position:fixed;top:0;left:0;right:0;height:11vh;display:flex;align-items:center;justify-content:space-between;padding:0 4vw}}
+.brand{{display:flex;align-items:center;gap:1.6vw}}
+.logo{{height:clamp(26px,4.2vh,72px);opacity:.9}}
+.sep{{width:2px;height:4.4vh;border-radius:2px;background:#38bdf8;opacity:.55}}
+h1{{font-size:3.4vh;font-weight:700;letter-spacing:.32em;text-transform:uppercase;color:#38bdf8}}
+.clock{{font-size:4.2vh;font-weight:300;font-variant-numeric:tabular-nums;opacity:.85}}
+.sub{{position:fixed;top:11vh;left:4vw;font-size:2.4vh;color:#94a3b8;letter-spacing:.04em}}
+.list{{position:fixed;top:16vh;bottom:9vh;left:4vw;right:4vw;display:flex;flex-direction:column;gap:1.6vh;transition:opacity .5s}}
+.list.out{{opacity:0}}
+.day{{display:grid;grid-template-columns:13vh 1fr;gap:2.4vw;align-items:start;padding:1.6vh 2vw;border-radius:1.8vh;
+  background:rgba(148,163,184,.08);border:1px solid rgba(148,163,184,.14)}}
+.day.today{{background:rgba(239,68,68,.14);border-color:rgba(248,113,113,.55)}}
+.day.tomorrow{{background:rgba(245,158,11,.12);border-color:rgba(251,191,36,.45)}}
+.date{{text-align:center;line-height:1}}
+.date b{{display:block;font-size:6.4vh;font-weight:800}}
+.date span{{display:block;font-size:2vh;letter-spacing:.14em;text-transform:uppercase;color:#94a3b8;margin-top:.6vh}}
+.ob{{display:flex;align-items:baseline;gap:1.4vw;padding:.6vh 0}}
+.ob + .ob{{border-top:1px solid rgba(148,163,184,.12)}}
+.ob .n{{font-size:3.4vh;font-weight:700}}
+.ob .w{{font-size:2.3vh;color:#94a3b8}}
+.ob .note{{font-size:2.1vh;color:#fbbf24;margin-left:auto;white-space:nowrap}}
+.pill{{display:inline-block;font-size:1.9vh;font-weight:800;letter-spacing:.12em;padding:.5vh 1.2vh;border-radius:.8vh;margin-bottom:.8vh;
+  background:#334155;color:#e2e8f0}}
+.today .pill{{background:#ef4444;color:#fff}}
+.tomorrow .pill{{background:#f59e0b;color:#1c1206}}
+.empty{{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2vh;font-size:4.4vh;color:#cbd5e1;text-align:center}}
+.empty small{{font-size:2.6vh;color:#94a3b8}}
+.foot{{position:fixed;left:4vw;right:4vw;bottom:3.5vh;display:flex;justify-content:space-between;font-size:2vh;color:#64748b}}
+</style></head><body>
+<div class="top"><div class="brand"><img class="logo" src="/assets/watermark.png" alt="Alava"><span class="sep"></span><h1>{title}</h1></div>
+  <div class="clock" id="clock"></div></div>
+<div class="sub" id="sub"></div>
+<div class="list" id="list"></div>
+<div class="foot"><span>Prazos federais e trabalhistas · confira sempre a agenda oficial da Receita Federal</span><span id="page"></span></div>
+<script>
+const F = {data}, PER = {per} * 1000;
+const $ = id => document.getElementById(id), pad = n => String(n).padStart(2, '0');
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const MES = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+function tick() {{ const d = new Date(); $('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()); }}
+tick(); setInterval(tick, 1000);
+const e = F.end.split('-');
+$('sub').textContent = `Vencimentos dos próximos ${{F.days}} dias (até ${{e[2]}}/${{e[1]}})`;
+// Agrupa por data e divide em páginas de até MAX_OBS obrigações (cabe na TV sem cortar)
+const MAX_OBS = 7, groups = [];
+F.items.forEach(it => {{ const g = groups[groups.length - 1]; if (g && g.date === it.date) g.obs.push(it); else groups.push({{date: it.date, in_days: it.in_days, weekday: it.weekday, obs: [it]}}); }});
+const pages = []; let cur = [], n = 0;
+groups.forEach(g => {{ if (n && n + g.obs.length > MAX_OBS) {{ pages.push(cur); cur = []; n = 0; }} cur.push(g); n += g.obs.length; }});
+if (cur.length) pages.push(cur);
+function when(d) {{ return d === 0 ? 'HOJE' : d === 1 ? 'AMANHÃ' : `EM ${{d}} DIAS`; }}
+function render(p) {{
+  const L = $('list');
+  if (!pages.length) {{ L.innerHTML = ''; document.body.insertAdjacentHTML('beforeend',
+    `<div class="empty">✅ Nenhum vencimento nos próximos ${{F.days}} dias<small>Bom trabalho!</small></div>`); return; }}
+  L.classList.add('out');
+  setTimeout(() => {{
+    L.innerHTML = pages[p].map(g => {{
+      const [y, m, d] = g.date.split('-');
+      const cls = g.in_days === 0 ? 'today' : g.in_days === 1 ? 'tomorrow' : '';
+      return `<div class="day ${{cls}}"><div class="date"><b>${{d}}</b><span>${{MES[+m - 1]}} · ${{esc(g.weekday.slice(0, 3))}}</span></div>
+        <div><span class="pill">${{when(g.in_days)}}</span>${{g.obs.map(o => `<div class="ob"><span class="n">${{esc(o.name)}}</span>
+        <span class="w">${{esc(o.who)}}</span>${{o.note ? `<span class="note">${{esc(o.note)}}</span>` : ''}}</div>`).join('')}}</div></div>`;
+    }}).join('');
+    $('page').textContent = pages.length > 1 ? `${{p + 1}} / ${{pages.length}}` : '';
+    L.classList.remove('out');
+  }}, 400);
+}}
+let pg = 0; render(0);
+if (pages.length > 1) setInterval(() => {{ pg = (pg + 1) % pages.length; render(pg); }}, PER);
+setTimeout(() => location.reload(), 1800000);
+</script></body></html>""", headers={"Cache-Control": "no-store"})
+
+
+# ─── Aviso urgente (0.17.0) ──────────────────────────────────────────────────
+#
+# Painel → Programação → "📢 Aviso urgente": um texto que passa POR CIMA da programação por N minutos
+# ("Reunião às 15h", "Cliente na recepção"). Fica só na memória do servidor (reiniciar encerra o aviso).
+# Vai no estado ("urgent") e na assinatura do WebSocket: o player interrompe o item, mostra /view/urgent
+# até "until" e depois volta ao item que foi interrompido. "Encerrar" ou "Pular item" tiram o aviso do ar.
+URGENT_STYLES = {"alert": ("#f59e0b", "#1c1206", "⚠️", "Atenção"), "urgent": ("#ef4444", "#ffffff", "🚨", "Urgente"),
+                 "info": ("#38bdf8", "#0b1120", "📢", "Aviso")}
+_urgent: dict = {}
+
+
+def urgent_active() -> dict | None:
+    if _urgent and _urgent["until"] > time.time():
+        return _urgent
+    return None
+
+
+@app.post("/api/urgent", dependencies=[Depends(require_auth)])
+async def urgent_start(request: Request):
+    body = await request.json()
+    text = str(body.get("text") or "").strip()[:240]
+    if not text:
+        raise HTTPException(400, "Escreva o texto do aviso")
+    minutes = _num(body.get("minutes"), 5, 1, 120)
+    style = body.get("style") if body.get("style") in URGENT_STYLES else "alert"
+    _urgent.clear()
+    _urgent.update(id=uuid.uuid4().hex[:8], text=text, sub=str(body.get("sub") or "").strip()[:160], style=style,
+                   minutes=minutes, started=time.time(), until=time.time() + minutes * 60)
+    return {"ok": True, **urgent_public(), "players": len(_players)}
+
+
+@app.delete("/api/urgent", dependencies=[Depends(require_auth)])
+def urgent_stop():
+    _urgent.clear()
+    return {"ok": True}
+
+
+def urgent_public() -> dict:
+    u = urgent_active()
+    if not u:
+        return {"urgent": None}
+    return {"urgent": {k: u[k] for k in ("id", "text", "sub", "style", "until", "minutes")} |
+            {"until_txt": datetime.fromtimestamp(u["until"]).strftime("%H:%M"), "remaining": round(u["until"] - time.time())}}
+
+
+@app.get("/view/urgent")
+def view_urgent():
+    u = urgent_active()
+    if not u:
+        return view_html('<div style="height:100vh;display:flex;align-items:center;justify-content:center;font-size:4vh;'
+                         'color:#64748b;background:#0b1120">Aviso encerrado</div>')
+    bg, fg, icon, label = URGENT_STYLES[u["style"]]
+    text, sub = html.escape(u["text"]), html.escape(u["sub"])
+    size = 12 if len(u["text"]) < 40 else 9 if len(u["text"]) < 90 else 6.6 if len(u["text"]) < 160 else 5
+    return HTMLResponse(f"""<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f8fafc;font-family:'Segoe UI',system-ui,sans-serif}}
+.band{{position:fixed;left:0;right:0;top:0;height:13vh;background:{bg};color:{fg};display:flex;align-items:center;gap:2vw;padding:0 4vw;
+  font-size:5vh;font-weight:800;letter-spacing:.3em;text-transform:uppercase;animation:pulse 2.4s ease-in-out infinite}}
+.band img{{height:5.4vh;margin-left:auto;{'filter:brightness(0);' if fg != '#ffffff' else ''}opacity:.85}}
+@keyframes pulse{{50%{{filter:brightness(1.18)}}}}
+.box{{position:fixed;top:13vh;bottom:9vh;left:6vw;right:6vw;display:flex;flex-direction:column;justify-content:center;gap:4vh}}
+.t{{font-size:{size}vh;font-weight:800;line-height:1.1;animation:in .8s ease both}}
+.s{{font-size:4.2vh;color:#cbd5e1;line-height:1.35}}
+.foot{{position:fixed;left:6vw;right:6vw;bottom:4vh;display:flex;justify-content:space-between;font-size:2.6vh;color:#94a3b8;
+  font-variant-numeric:tabular-nums}}
+.edge{{position:fixed;left:0;top:13vh;bottom:0;width:1.2vw;background:{bg}}}
+@keyframes in{{from{{opacity:0;transform:translateY(4vh)}}to{{opacity:1;transform:none}}}}
+</style></head><body>
+<div class="band"><span>{icon}</span><span>{label}</span><img src="/assets/watermark.png" alt="Alava"></div>
+<div class="edge"></div>
+<div class="box"><div class="t">{text}</div>{f'<div class="s">{sub}</div>' if sub else ''}</div>
+<div class="foot"><span id="clock"></span><span></span></div>
+<script>
+const pad = n => String(n).padStart(2, '0');
+function tick() {{ const d = new Date(); document.getElementById('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()); }}
+tick(); setInterval(tick, 1000);
+</script></body></html>""", headers={"Cache-Control": "no-store"})
+
+
+# ─── Relatório do que passou na TV (0.17.0) ──────────────────────────────────
+#
+# Cada vez que o player avisa o que pôs na tela (POST /api/player/now), a linha anterior de play_log é
+# fechada (ended + end_reason, que o próprio player manda em "prev_reason") e uma nova é aberta.
+# Itens que o player PULOU sem mostrar (Waze fora) chegam por POST /api/player/skipped.
+# As manchetes exibidas (POST /api/news-seen) vão para news_log. Guarda REPORT_KEEP_DAYS dias.
+# Painel → Relatório: GET /api/report?start=AAAA-MM-DD&end=AAAA-MM-DD e /api/report.csv.
+REPORT_KEEP_DAYS = 90
+END_REASONS = {"tempo": "Tempo completo", "pulado": "Pulado pelo painel", "voltou": "Voltou pelo painel",
+               "programacao": "Mudou a programação", "editado": "Editado no painel", "removido": "Removido/desativado",
+               "login": "Site pediu login", "waze": "Waze fora", "video_fim": "Vídeo terminou",
+               "urgente": "Aviso urgente", "encerrado": "Encerrado pelo painel", "erro": "Não abriu",
+               "interrompido": "Interrompido", "": "Sem informação"}
+_play_row: int | None = None      # linha de play_log em exibição agora
+
+
+def report_prune() -> None:
+    limit = (datetime.now() - _timedelta(days=REPORT_KEEP_DAYS)).strftime("%Y-%m-%d")
+    try:
+        with db() as con:
+            con.execute("DELETE FROM play_log WHERE day < ?", (limit,))
+            con.execute("DELETE FROM news_log WHERE day < ?", (limit,))
+            con.commit()
+    except sqlite3.Error as e:
+        print(f"[relatório] limpeza: {e}")
+
+
+def report_log_play(body: dict) -> None:
+    """Fecha a linha anterior e abre a do item que entrou agora."""
+    global _play_row
+    now = time.time()
+    try:
+        with db() as con:
+            if _play_row:
+                con.execute("UPDATE play_log SET ended=?, end_reason=? WHERE id=? AND ended IS NULL",
+                            (now, str(body.get("prev_reason") or "tempo")[:20], _play_row))
+            cur = con.execute(
+                "INSERT INTO play_log (day, started, item_id, name, type, source, planned) VALUES (?,?,?,?,?,?,?)",
+                (datetime.now().strftime("%Y-%m-%d"), now, body.get("id"), str(body.get("name") or "")[:120],
+                 body.get("type"), str(body.get("source") or "")[:80], int(body.get("duration") or 0)))
+            _play_row = cur.lastrowid
+            con.commit()
+    except sqlite3.Error as e:
+        print(f"[relatório] {e}")
+
+
+@app.post("/api/player/skipped")
+async def player_skipped(request: Request):
+    """O player pulou um item sem mostrar (ex.: Waze fora): entra no relatório com 0 s."""
+    if not _is_local(request):
+        raise HTTPException(403, "Só o player deste computador informa")
+    b = await request.json()
+    now = time.time()
+    with db() as con:
+        con.execute("INSERT INTO play_log (day, started, ended, item_id, name, type, source, planned, end_reason) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (datetime.now().strftime("%Y-%m-%d"), now, now, b.get("id"), str(b.get("name") or "")[:120],
+                     b.get("type"), str(b.get("source") or "")[:80], int(b.get("duration") or 0),
+                     str(b.get("reason") or "")[:20]))
+        con.commit()
+    return {"ok": True}
+
+
+def _report_days(start: str | None, end: str | None) -> tuple[str, str]:
+    today = datetime.now().strftime("%Y-%m-%d")
+    ok = lambda s: bool(s) and len(s) == 10 and s[4] == "-" and s[7] == "-" and s.replace("-", "").isdigit()
+    s = start if ok(start) else today
+    e = end if ok(end) else s
+    return (s, e) if s <= e else (e, s)
+
+
+def report_data(start: str | None = None, end: str | None = None) -> dict:
+    s, e = _report_days(start, end)
+    now = time.time()
+    with db() as con:
+        rows = [dict(r) for r in con.execute("SELECT * FROM play_log WHERE day BETWEEN ? AND ? ORDER BY started", (s, e))]
+        news = [dict(r) for r in con.execute("SELECT * FROM news_log WHERE day BETWEEN ? AND ? ORDER BY at", (s, e))]
+    timeline, summary = [], {}
+    for r in rows:
+        if r["ended"] is None:      # aberta: é a que está no ar agora, ou o servidor reiniciou no meio
+            r["ended"] = now if r["id"] == _play_row else r["started"] + (r["planned"] or 0)
+            r["end_reason"] = "no_ar" if r["id"] == _play_row else ""
+        secs = max(0, round(r["ended"] - r["started"]))
+        reason = r["end_reason"] or ""
+        timeline.append({"start": datetime.fromtimestamp(r["started"]).strftime("%d/%m %H:%M:%S"), "name": r["name"],
+                         "type": r["type"], "source": r["source"], "planned": r["planned"], "seconds": secs,
+                         "reason": reason, "reason_txt": "No ar agora" if reason == "no_ar" else END_REASONS.get(reason, reason)})
+        k = (r["item_id"] or r["name"], r["type"])
+        g = summary.setdefault(k, {"name": r["name"], "type": r["type"], "shows": 0, "seconds": 0, "skipped": 0,
+                                   "interrupted": 0, "reasons": {}})
+        if secs == 0 and reason in ("waze", "login"):
+            g["skipped"] += 1
+        else:
+            g["shows"] += 1
+        g["seconds"] += secs
+        if reason not in ("tempo", "no_ar", "video_fim", ""):
+            g["interrupted"] += 1
+            g["reasons"][END_REASONS.get(reason, reason)] = g["reasons"].get(END_REASONS.get(reason, reason), 0) + 1
+    items = sorted(summary.values(), key=lambda g: -g["seconds"])
+    return {"start": s, "end": e, "items": items, "timeline": timeline,
+            "news": [{"at": datetime.fromtimestamp(n["at"]).strftime("%d/%m %H:%M"), "title": n["title"],
+                      "source": n["source"], "item": n["item_name"]} for n in news],
+            "totals": {"seconds": sum(g["seconds"] for g in items), "shows": sum(g["shows"] for g in items),
+                       "interrupted": sum(g["interrupted"] for g in items), "skipped": sum(g["skipped"] for g in items),
+                       "news": len(news), "news_unique": len({n["title"] for n in news})}}
+
+
+@app.get("/api/report", dependencies=[Depends(require_auth)])
+def api_report(start: str | None = None, end: str | None = None):
+    return report_data(start, end)
+
+
+@app.get("/api/report.csv", dependencies=[Depends(require_auth)])
+def api_report_csv(start: str | None = None, end: str | None = None, kind: str = "timeline"):
+    """Planilha (abre no Excel: separador ";" e acentos em UTF-8 com BOM)."""
+    import csv
+    import io
+    r = report_data(start, end)
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    if kind == "news":
+        w.writerow(["Quando", "Manchete", "Fonte", "Item"])
+        for n in r["news"]:
+            w.writerow([n["at"], n["title"], n["source"], n["item"]])
+    else:
+        w.writerow(["Início", "Item", "Tipo", "Programação", "Previsto (s)", "No ar (s)", "Como terminou"])
+        for t in r["timeline"]:
+            w.writerow([t["start"], t["name"], t["type"], t["source"], t["planned"], t["seconds"], t["reason_txt"]])
+    name = f"alava_tv_{kind}_{r['start']}" + (f"_a_{r['end']}" if r["end"] != r["start"] else "") + ".csv"
+    return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 # ─── Avisos por data (0.11.0) ─────────────────────────────────────────────────
@@ -3254,6 +3750,9 @@ def view_news(item_id: str, tv: int = 0):
     """
     cfg = _item_config(item_id)
     tv_js = "true" if tv else "false"
+    with db() as con:                     # 0.17.0: nome do item, para o relatório das manchetes
+        row = con.execute("SELECT name FROM items WHERE id=?", (item_id,)).fetchone()
+    item_name_js = json.dumps(row["name"] if row else "", ensure_ascii=False).replace("</", "<\\/")
     data = json.dumps(get_news(cfg, tv=bool(tv)), ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(str(cfg.get("title") or "Notícias"))
     accent = _css_color(cfg.get("accent"), "#38bdf8")
@@ -3323,7 +3822,7 @@ html,body{{width:100%;height:100%;overflow:hidden;background:#0b1120;color:#f1f5
 let N = {data}, FX = {fx_data};
 const PER = {per} * 1000, SHOW_IMG = {show_img}, KEY = 'news-idx-{html.escape(item_id)}';
 const SHOW_FX = {show_fx_js}, SHOW_IND = {show_ind_js}, ACC = '{accent}';
-const TV = {tv_js}, SEEN_AFTER = 3000;   // 0.16.0: na TV, o card que ficou 3 s na tela conta como exibido
+const TV = {tv_js}, SEEN_AFTER = 3000, ITEM_ID = {json.dumps(item_id)}, ITEM_NAME = {item_name_js};   // 0.16.0: na TV, o card que ficou 3 s na tela conta como exibido
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
 function tick() {{ const d = new Date(); $('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()); }}
@@ -3342,7 +3841,7 @@ function markSeen(it) {{
   clearTimeout(seenTimer);
   if (!TV) return;
   seenTimer = setTimeout(() => fetch('/api/news-seen', {{method: 'POST', headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{title: it.title, link: it.link || ''}})}}).catch(() => {{}}), SEEN_AFTER);
+    body: JSON.stringify({{title: it.title, link: it.link || '', source: it.source || '', item_id: ITEM_ID, item_name: ITEM_NAME}})}}).catch(() => {{}}), SEEN_AFTER);
 }}
 function show(target) {{
   const list = (N && N.items) || [];
@@ -3519,6 +4018,7 @@ def startup():
     init_db()
     UPDATE_LOCK.unlink(missing_ok=True)        # servidor voltou: a atualização (se havia) terminou
     _migrate_news_sources()                    # 0.14.0: itens de notícias antigos ganham as fontes contábeis
+    report_prune()                             # 0.17.0: relatório guarda só os últimos REPORT_KEEP_DAYS dias
     threading.Thread(target=_weather_refresher, name="clima", daemon=True).start()
     print(f"\n✅ Alava Vision {__version__} rodando em http://0.0.0.0:{PORT}/")
     print(f"   Login: {ADMIN_USER} / {ADMIN_PASSWORD}\n")
